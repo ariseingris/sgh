@@ -1,7 +1,6 @@
 #include <Arduino.h>
 #include <Wire.h>
 
-// Include các file header đã đổi tên
 #include "sensor_light.h"    // BH1750
 #include "sensor_temp_hum.h" // SHT30/31
 #include "sensor_co2.h"      // SCD40
@@ -14,16 +13,16 @@
 #define LED_PIN PC13 
 
 void setup() {
-  // 1. Khởi tạo cổng Serial (Dùng qua USB CDC theo file .ini của bạn)
+
   Serial.begin(115200);
   delay(2000); // Chờ Serial khởi động
 
-  // 2. Cấu hình chân I2C cho STM32 Blue Pill
+
   Wire.setSDA(PB7);
   Wire.setSCL(PB6);
   Wire.begin();
 
-  // 3. Khởi tạo các chân IO
+
   pinMode(RELAY_PIN, OUTPUT);
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(RELAY_PIN, HIGH); // Tắt relay (kích thấp)
@@ -31,7 +30,7 @@ void setup() {
 
   Serial.println("--- DANG KHOI TAO HE THONG CAM BIEN ---");
 
-  // 4. Khởi tạo từng cảm biến thông qua các hàm đã định nghĩa trong file .h
+h
   setupBH1750_Sensor();
   setupSHT31_Sensor();
   setupSCD40_Sensor();
@@ -41,7 +40,7 @@ void setup() {
 }
 
 void loop() {
-  // --- Đọc dữ liệu từ các cảm biến ---
+
   float lux = readBH1750_Lux();
   float t, h;
   readSHT31_Data(t, h);
