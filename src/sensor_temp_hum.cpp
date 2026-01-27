@@ -5,7 +5,7 @@
 Adafruit_SHT31 sht31 = Adafruit_SHT31();
 
 void setupSHT31_Sensor() {
-    // STM32 sử dụng địa chỉ 0x44 mặc định cho SHT30/31
+    // STM32 use 0x44 format for SHT30
     if (!sht31.begin(0x44)) { 
         Serial.println("LOI: Khong tim thay SHT31 Adafruit!");
     } else {

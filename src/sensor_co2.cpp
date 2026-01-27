@@ -1,4 +1,4 @@
-#include "sensor_co2.h" // Phải khớp với tên file .h mới
+#include "sensor_co2.h" 
 #include <SensirionI2CScd4x.h>
 
 SensirionI2CScd4x scd4x;
