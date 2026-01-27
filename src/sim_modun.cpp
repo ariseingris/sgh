@@ -1,6 +1,5 @@
-#include "sensor_sim.h"
+#include "sim_modun.h"
 
-// Khởi tạo Serial2 cho SIM
 HardwareSerial SerialSIM(PA3, PA2); 
 
 void setupSIM_A7680() {
@@ -32,14 +31,13 @@ void sendSMS_Alert(String phoneNumber, String message) {
     
     SerialSIM.print(message);
     delay(100);
-    SerialSIM.write(26); // Ký tự Ctrl+Z để kết thúc tin nhắn
-    delay(5000); // Chờ mạng xử lý
+    SerialSIM.write(26); 
+    delay(5000); 
     
     Serial.println("SMS da gui xong.");
 }
 
 void updateSIM_Connection() {
-    // Đọc phản hồi từ SIM nếu có (để debug)
     if (SerialSIM.available()) {
         Serial.print("[SIM]: ");
         Serial.println(SerialSIM.readString());
