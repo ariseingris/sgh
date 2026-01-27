@@ -4,19 +4,19 @@ void setup_Actuators() {
     pinMode(FAN_RELAY_PIN, OUTPUT);
     pinMode(STATUS_LED_PIN, OUTPUT);
     
-    // Mặc định tắt quạt khi khởi động (Mức CAO thường là TẮT với module Relay kích thấp)
+    // Mặc định tắt quạt khi khởi động 
     digitalWrite(FAN_RELAY_PIN, HIGH); 
-    digitalWrite(STATUS_LED_PIN, HIGH); // Tắt LED
+    digitalWrite(STATUS_LED_PIN, HIGH); 
 }
 
 void control_Fan(bool state) {
     if (state) {
-        digitalWrite(FAN_RELAY_PIN, LOW);  // BẬT Quạt (Mức thấp)
-        digitalWrite(STATUS_LED_PIN, LOW); // Bật LED báo hiệu
+        digitalWrite(FAN_RELAY_PIN, LOW); 
+        digitalWrite(STATUS_LED_PIN, LOW); 
         Serial.println(">>> QUAT: BAT");
     } else {
-        digitalWrite(FAN_RELAY_PIN, HIGH); // TẮT Quạt (Mức cao)
-        digitalWrite(STATUS_LED_PIN, HIGH); // Tắt LED
+        digitalWrite(FAN_RELAY_PIN, HIGH); 
+        digitalWrite(STATUS_LED_PIN, HIGH);
         Serial.println(">>> QUAT: TAT");
     }
 }
