@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include <Wire.h>
-
 #include "sensor_light.h"    // BH1750
 #include "sensor_temp_hum.h" // SHT30/31
 #include "sensor_co2.h"      // SCD40
@@ -30,7 +29,7 @@ void setup() {
 
   Serial.println("--- DANG KHOI TAO HE THONG CAM BIEN ---");
 
-h
+
   setupBH1750_Sensor();
   setupSHT31_Sensor();
   setupSCD40_Sensor();
