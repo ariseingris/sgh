@@ -6,13 +6,15 @@
 #include "sensor_pressure.h" // BME280
 #include "sensor_gas.h"      // MQ-4 (Analog)
 #include "sensor_soil.h"     // Soil Moisture (Analog)
-#include "fan.h"             // Fan/Relay control
+#include "gadget.h"             // Fan/Relay control
 #include "sim_modun.h"      // SIM module functions
 
 #define RELAY_PIN PA1 
 #define LED_PIN PC13 
-
-unsigned long lastmessage = 0;
+// sim pre setup
+const String phoneNumber = "+84xxxxxxxxx"; // Số điện thoại nhận cảnh báo
+unsigned long last_period_message = 0;
+const unsigned long interval_message = 3600000;
 bool alertSent = false;
 
 void setup() {
@@ -43,7 +45,8 @@ void setup() {
 }
 
 void loop() {
-
+  
+  
   float lux = readBH1750_Lux();
   float t, h;
   readSHT31_Data(t, h);
@@ -51,6 +54,7 @@ void loop() {
   float pressure = readBME280_Pressure();
   int gasValue = readMQ4_Gas();
   int soilMoisture = readSoil_Moisture();
+  unsigned long currentMillis = millis(); 
 
   // --- In dữ liệu ra Serial Monitor ---
   Serial.println("------------------------------------");
@@ -63,10 +67,20 @@ void loop() {
     digitalWrite(RELAY_PIN, LOW); 
     digitalWrite(LED_PIN, LOW);  
     control_Fan(true);
-    if (!alertSent){
-      String message = "CO2: " + String(co2) + " ppm, Temp: " + String(t) + " C, Gas: " + String(gasValue) + "Soil: " + String(soilMoisture) + "%";
-      sendSMS_Alert("+84xxxxxxxxx", message);
+    if (currentMillis - last_period_message >= interval_message) {
+      String message = "information at n times:\n";
+      message += "CO2: " + String(co2) + " ppm\n"; //SCD40
+      message += "Temp: " + String(t) + " C\n"; //SHT30
+      message += "Hum: " + String(h) + " %\n"; //SHT30
+      message += "Gas: " + String(gasValue) + "\n";//MQ4
+      message += "Soil: " + String(soilMoisture) + "%\n";//Soil
+      message += "Light: " + String(lux) + " Lux\n"; //BH1750
+      message += "Pressure: " + String(pressure) + " hPa"; //BME280
+      //SCD40 - SHT30 - MQ4 - Soil - BH1750 - BME280
       alertSent = true;
+      sendSMS_Alert(phoneNumber, message);
+      last_period_message = currentMillis;
+     
     }
   } else {
     digitalWrite(RELAY_PIN, HIGH); 
