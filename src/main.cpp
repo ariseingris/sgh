@@ -1,3 +1,4 @@
+
 #include <Arduino.h>
 #include <Wire.h>
 #include "sensor_light.h"    // BH1750
@@ -34,10 +35,10 @@ void setup() {
   digitalWrite(LED_PIN, HIGH);   
 
   Serial.println(" DANG KHOI TAO HE THONG CAM BIEN ");
-  setupSIM_A7680();
-  setup_Actuators();
+  //setupSIM_A7680();
+  //setup_Actuators();
   setupBH1750_Sensor();
-  setupSHT31_Sensor();
+  setupSHT30_Sensor();
   setupSCD40_Sensor();
   setupBME280_Sensor();
   
@@ -46,28 +47,30 @@ void setup() {
 
 void loop() {
   
-  
+  //check_PhysicalButtons();
   float lux = readBH1750_Lux();
   float t, h;
-  readSHT31_Data(t, h);
+  readSHT30_Data(t, h);
   uint16_t co2 = readSCD40_CO2();
   float pressure = readBME280_Pressure();
   int gasValue = readMQ4_Gas();
-  int soilMoisture = readSoil_Moisture();
+  //int soilMoisture = readSoil_Moisture();
   unsigned long currentMillis = millis(); 
 
   // --- In dữ liệu ra Serial Monitor ---
   Serial.println("------------------------------------");
   Serial.printf("CO2: %u ppm | Temp: %.2f *C | Hum: %.2f %%\n", co2, t, h);
   Serial.printf("Light: %.1f Lux | Pressure: %.1f hPa\n", lux, pressure);
-  Serial.printf("Gas MQ4: %d | Soil: %d %%\n", gasValue, soilMoisture);
+  Serial.printf("Gas MQ4: %d ", gasValue);
+  //Serial.printf("Gas MQ4: %d | Soil: %d %%\n", gasValue, soilMoisture);
 
   // --- Logic điều khiển  ---
+  /*
   if (co2 > 1000 || t > 30.0 || gasValue > 500) {
     digitalWrite(RELAY_PIN, LOW); 
     digitalWrite(LED_PIN, LOW);  
     control_Fan(true);
-    if (currentMillis - last_period_message >= interval_message) {
+    /*if (currentMillis - last_period_message >= interval_message) {
       String message = "information at n times:\n";
       message += "CO2: " + String(co2) + " ppm\n"; //SCD40
       message += "Temp: " + String(t) + " C\n"; //SHT30
@@ -82,13 +85,16 @@ void loop() {
       last_period_message = currentMillis;
      
     }
-  } else {
+      */
+
+  /*} else {
     digitalWrite(RELAY_PIN, HIGH); 
     digitalWrite(LED_PIN, HIGH);
     control_Fan(false);
-    alertSent = false;
+    //alertSent = false;
   }
-  updateSIM_Connection();
+  */
+  //updateSIM_Connection();
 
   delay(2000); 
 }

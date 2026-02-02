@@ -6,7 +6,7 @@ void setupSIM_A7680() {
     SerialSIM.begin(115200); // Tốc độ mặc định của SIM A7680
     delay(2000);
     
-    Serial.println("Kiem tra ket noi SIM A7680...");
+    Serial.println("Kiem tra ket noi SIM A7680...");    
     
     // Thử gửi lệnh AT cơ bản
     SerialSIM.println("AT");
