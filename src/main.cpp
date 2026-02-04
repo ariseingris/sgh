@@ -7,13 +7,13 @@
 #include "sensor_pressure.h" // BME280
 #include "sensor_gas.h"      // MQ-4 (Analog)
 #include "sensor_soil.h"     // Soil Moisture (Analog)
-#include "gadget.h"             // Fan/Relay control
+#include "gadget.h"          // Fan/Relay control
 #include "sim_modun.h"      // SIM module functions
 
 #define RELAY_PIN PA1 
 #define LED_PIN PC13 
 // sim pre setup
-const String phoneNumber = "+84xxxxxxxxx"; // Số điện thoại nhận cảnh báo
+const String phoneNumber = "+84xxxxxxxxx"; // alert phone number
 unsigned long last_period_message = 0;
 const unsigned long interval_message = 3600000;
 bool alertSent = false;
@@ -23,9 +23,7 @@ void setup() {
   Serial.begin(115200);
   delay(2000);
 
-
-  Wire.setSDA(PB7);
-  Wire.setSCL(PB6);
+// i2c setup
   Wire.begin();
 
   // Cấu hình chân Relay và LED
@@ -35,8 +33,8 @@ void setup() {
   digitalWrite(LED_PIN, HIGH);   
 
   Serial.println(" DANG KHOI TAO HE THONG CAM BIEN ");
-  //setupSIM_A7680();
-  //setup_Actuators();
+  setupSIM_A7680();
+  setup_Actuators();
   setupBH1750_Sensor();
   setupSHT30_Sensor();
   setupSCD40_Sensor();
@@ -47,24 +45,47 @@ void setup() {
 
 void loop() {
   
-  //check_PhysicalButtons();
+  check_PhysicalButtons();
   float lux = readBH1750_Lux();
-  float t, h;
+  float t = 0.0, h = 0.0;
   readSHT30_Data(t, h);
-  uint16_t co2 = readSCD40_CO2();
   float pressure = readBME280_Pressure();
   int gasValue = readMQ4_Gas();
-  //int soilMoisture = readSoil_Moisture();
+  int soilMoisture = readSoil_Moisture();
   unsigned long currentMillis = millis(); 
-
+  bool dataReady = isSCD40_DataReady();
+  
   // --- In dữ liệu ra Serial Monitor ---
-  Serial.println("------------------------------------");
-  Serial.printf("CO2: %u ppm | Temp: %.2f *C | Hum: %.2f %%\n", co2, t, h);
-  Serial.printf("Light: %.1f Lux | Pressure: %.1f hPa\n", lux, pressure);
-  Serial.printf("Gas MQ4: %d ", gasValue);
-  //Serial.printf("Gas MQ4: %d | Soil: %d %%\n", gasValue, soilMoisture);
+  if(dataReady) {
+    uint16_t co2 = readSCD40_CO2();
+    Serial.println("----- Du lieu cam bien -----");
+    Serial.print("Anh sang: ");
+    Serial.print(lux);
+    Serial.println(" Lux");
 
-  // --- Logic điều khiển  ---
+    Serial.print("Nhiet do SHT30: ");
+    Serial.print(t);
+    Serial.println(" C");
+
+    Serial.print("Do am SHT30: ");
+    Serial.print(h);
+    Serial.println(" %");
+
+    Serial.print("CO2 SCD40: ");
+    Serial.print(co2);
+    Serial.println(" ppm");
+
+    Serial.print("Ap suat BME280: ");
+    Serial.print(pressure);
+    Serial.println(" hPa");
+
+    delay(5000); // Wait 5 seconds before next read
+  } else {
+    Serial.println("Du lieu CO2 chua san sang, bo qua lan doc nay.");
+    delay(1000); // Wait 1 second before retry
+  }
+
+  // --- Logic control  ---
   /*
   if (co2 > 1000 || t > 30.0 || gasValue > 500) {
     digitalWrite(RELAY_PIN, LOW); 

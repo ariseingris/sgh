@@ -1,6 +1,6 @@
 #include <Wire.h>
 #include <BH1750.h>   
-#include "bh1750.h"   
+#include "sensor_light.h"   
 
 BH1750 lightMeter;
 

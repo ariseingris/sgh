@@ -1,5 +1,8 @@
+#include <Arduino.h>
 #include "sensor_pressure.h"
 #include <Adafruit_BME280.h>
+#include <Wire.h>
+
 
 Adafruit_BME280 bme;
 

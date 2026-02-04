@@ -4,4 +4,5 @@
 
 void setupSCD40_Sensor();
 uint16_t readSCD40_CO2();
+bool isSCD40_DataReady();
 #endif
