@@ -13,7 +13,7 @@
 #define RELAY_PIN PA1 
 #define LED_PIN PC13 
 // sim pre setup
-const String phoneNumber = "+84xxxxxxxxx"; // alert phone number
+const String phoneNumber = "+81814686688"; // alert phone number
 unsigned long last_period_message = 0;
 const unsigned long interval_message = 3600000;
 bool alertSent = false;

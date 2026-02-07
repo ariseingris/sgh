@@ -4,9 +4,9 @@
 #include <Arduino.h>
 
 // Định nghĩa chân cắm
-#define FAN_RELAY_PIN  PA1
-#define PISTON_IN1_PIN PA3
-#define PISTON_IN2_PIN PA4
+#define FAN_RELAY  PA1
+#define PISTON_IN1 PA3
+#define PISTON_IN2 PA4
 #define STATUS_LED_PIN PC13
 #define BUTTON_OPEN_PIN PA7
 #define BUTTON_CLOSE_PIN PB0
