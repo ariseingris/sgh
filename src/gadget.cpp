@@ -1,63 +1,81 @@
 #include "gadget.h"
 
+// --- CẤU HÌNH HỆ THỐNG ---
+// Active High: HIGH = ON, LOW = OFF
 void setup_Actuators() {
-    pinMode(FAN_RELAY_PIN, OUTPUT);
-    pinMode(PISTON_IN1_PIN, OUTPUT);
-    pinMode(PISTON_IN2_PIN, OUTPUT);
-    pinMode(STATUS_LED_PIN, OUTPUT);
-
+    pinMode(FAN_RELAY, OUTPUT);
+    pinMode(PISTON_IN1, OUTPUT);
+    pinMode(PISTON_IN2, OUTPUT);
     pinMode(BUTTON_OPEN_PIN, INPUT_PULLUP);
     pinMode(BUTTON_CLOSE_PIN, INPUT_PULLUP);
 
-    // Mặc định TẮT hết (Mức CAO cho Relay kích thấp)
-    digitalWrite(FAN_RELAY_PIN, HIGH);
-    digitalWrite(PISTON_IN1_PIN, HIGH);
-    digitalWrite(PISTON_IN2_PIN, HIGH);
-    digitalWrite(STATUS_LED_PIN, HIGH);
-}
-void control_Piston(int mode) {
-    if (mode == 1) { // Đẩy ra
-        digitalWrite(PISTON_IN1_PIN, LOW);
-        digitalWrite(PISTON_IN2_PIN, HIGH);
-        Serial.println("PISTON: DANG DAY RA");
-    } 
-    else if (mode == 2) { // Thu vào
-        digitalWrite(PISTON_IN1_PIN, HIGH);
-        digitalWrite(PISTON_IN2_PIN, LOW);
-        Serial.println("PISTON: DANG THU VAO");
-    } 
-    else { // Dừng
-        digitalWrite(PISTON_IN1_PIN, HIGH);
-        digitalWrite(PISTON_IN2_PIN, HIGH);
-        Serial.println("PISTON: DUNG");
-    }
+    // Mặc định TẮT hết khi khởi động (Mức LOW cho Active High)
+    digitalWrite(FAN_RELAY, LOW);
+    digitalWrite(PISTON_IN1, LOW);
+    digitalWrite(PISTON_IN2, LOW);
 }
 
+// --- ĐIỀU KHIỂN XILANH (Sử dụng cầu H) ---
+void extend_Piston() {
+    digitalWrite(PISTON_IN1, HIGH);  
+    digitalWrite(PISTON_IN2, LOW); 
+    Serial.println(">>> XILANH: DAY RA (EXTEND)");
+}
+
+void retract_Piston() {
+    digitalWrite(PISTON_IN1, LOW);  
+    digitalWrite(PISTON_IN2, HIGH); 
+    Serial.println(">>> XILANH: RUT VE (RETRACT)");
+}
+
+void stop_Piston() {
+    digitalWrite(PISTON_IN1, LOW);  
+    digitalWrite(PISTON_IN2, LOW); 
+    Serial.println(">>> XILANH: DUNG");
+}
+
+// --- ĐIỀU KHIỂN QUẠT ---
 void control_Fan(bool state) {
     if (state) {
-        digitalWrite(FAN_RELAY_PIN, LOW); 
-        digitalWrite(STATUS_LED_PIN, LOW); 
+        digitalWrite(FAN_RELAY, HIGH); // Kích Relay ON
         Serial.println(">>> QUAT: BAT");
     } else {
-        digitalWrite(FAN_RELAY_PIN, HIGH); 
-        digitalWrite(STATUS_LED_PIN, HIGH);
+        digitalWrite(FAN_RELAY, LOW); // Kích Relay OFF
         Serial.println(">>> QUAT: TAT");
     }
 }
 
-void check_PhysicalButtons() {
-    // Nếu bấm nút Mở (nối GND nên mức LOW là đang bấm)
-    if (digitalRead(BUTTON_OPEN_PIN) == LOW) {
-        control_Piston(1); // Đẩy ra
-        delay(200);       
-    }
-    // Nếu bấm nút Đóng
-    else if (digitalRead(BUTTON_CLOSE_PIN) == LOW) {
-        control_Piston(2); // Thu vào
-        delay(200);
-    }
+// --- LOGIC ĐÓNG/MỞ HỆ THỐNG ---
+void open_System() {
+    Serial.println("--- DANG MO HE THONG ---");
+    extend_Piston();
+    delay(2000); // Chờ xilanh chạy hết hành trình
+    stop_Piston();
+    control_Fan(true); // Mở xong thì bật quạt để thông gió
+}
 }
 
-void toggle_StatusLED() {
-    digitalWrite(STATUS_LED_PIN, !digitalRead(STATUS_LED_PIN));
+void close_System() {
+    Serial.println("--- DANG DONG HE THONG ---");
+    control_Fan(true); // Tắt quạt trước khi đóng
+    delay(500);
+    retract_Piston();
+    delay(2000);
+    stop_Piston();
+}
+}
+
+
+
+// --- KIỂM TRA NÚT BẤM VẬT LÝ ---
+void check_PhysicalButtons() {
+    if (digitalRead(BUTTON_OPEN_PIN) == LOW) { // Nhấn nút Open
+        open_System();
+        delay(500); // Chống dội phím      
+    }
+    
+    if (digitalRead(BUTTON_CLOSE_PIN) == LOW) { // Nhấn nút Close
+        close_System();
+        delay(500);
+    }
 }

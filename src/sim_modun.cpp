@@ -32,9 +32,19 @@ void sendSMS_Alert(String phoneNumber, String message) {
     SerialSIM.print(message);
     delay(100);
     SerialSIM.write(26); 
-    delay(5000); 
+    delay(5000);
     
-    Serial.println("SMS da gui xong.");
+    // Check SMS response for success/error
+    if (SerialSIM.available()) {
+        String response = SerialSIM.readString();
+        if (response.indexOf("OK") >= 0 || response.indexOf("+CMGS") >= 0) {
+            Serial.println("SMS da gui thanh cong.");
+        } else {
+            Serial.println("Loi khi gui SMS: " + response);
+        }
+    } else {
+        Serial.println("Khong co phan hoi tu SIM.");
+    }
 }
 
 void updateSIM_Connection() {
