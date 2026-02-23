@@ -35,15 +35,16 @@ void stop_Piston() {
 }
 
 // --- ĐIỀU KHIỂN QUẠT ---
-void control_Fan(bool state) {
-    if (state) {
-        digitalWrite(FAN_RELAY, HIGH); // Kích Relay ON
-        Serial.println(">>> QUAT: BAT");
-    } else {
-        digitalWrite(FAN_RELAY, LOW); // Kích Relay OFF
-        Serial.println(">>> QUAT: TAT");
-    }
+void turn_Fan_ON() {
+    digitalWrite(FAN_RELAY, HIGH);
+    Serial.println(">>> QUAT: BAT");
 }
+
+void turn_Fan_OFF() {
+    digitalWrite(FAN_RELAY, LOW);
+    Serial.println(">>> QUAT: TAT");
+}
+
 
 // --- LOGIC ĐÓNG/MỞ HỆ THỐNG ---
 void open_System() {
@@ -51,19 +52,18 @@ void open_System() {
     extend_Piston();
     delay(2000); // Chờ xilanh chạy hết hành trình
     stop_Piston();
-    control_Fan(true); // Mở xong thì bật quạt để thông gió
-}
+    turn_Fan_OFF();
 }
 
 void close_System() {
     Serial.println("--- DANG DONG HE THONG ---");
-    control_Fan(true); // Tắt quạt trước khi đóng
+    turn_Fan_OFF();
     delay(500);
     retract_Piston();
     delay(2000);
     stop_Piston();
 }
-}
+
 
 
 

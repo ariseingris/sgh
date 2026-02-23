@@ -4,7 +4,7 @@
 #include <Arduino.h>
 
 // Định nghĩa chân cắm
-#define FAN_RELAY  PA1
+#define  FAN_RELAY  PA1
 //
 #define PISTON_IN1 PA3
 #define PISTON_IN2 PA4
@@ -19,7 +19,8 @@ void close_System();
 void extend_Piston();
 void retract_Piston();
 void stop_Piston();
-void control_Fan(bool state);
+void turn_Fan_ON();
+void turn_Fan_OFF();
 void check_PhysicalButtons();
 void toggle_StatusLED();
 

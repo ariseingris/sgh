@@ -1,6 +1,6 @@
 #include "sim_modun.h"
 
-HardwareSerial SerialSIM(PA3, PA2); 
+HardwareSerial SerialSIM(PA9, PA10); // RX, TX pins for SIM A7680
 
 void setupSIM_A7680() {
     SerialSIM.begin(115200); // Tốc độ mặc định của SIM A7680

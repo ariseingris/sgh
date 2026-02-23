@@ -1,4 +1,3 @@
-
 #include <Arduino.h>
 #include <Wire.h>
 #include "sensor_light.h"    // BH1750
@@ -6,18 +5,28 @@
 #include "sensor_co2.h"      // SCD40
 #include "sensor_pressure.h" // BME280
 #include "sensor_gas.h"      // MQ-4 (Analog)
-#include "sensor_soil.h"     // Soil Moisture (Analog)
-#include "gadget.h"          // Fan/Relay control
-#include "sim_modun.h"      // SIM module functions
+#include "sensor_soil.h"     // Soil Moisture (Analog)  
+#include "sim_modun.h"       // SIM A7680
 
-// sim pre setup
-const String phoneNumber = "0814686688"; // alert phone number
-unsigned long last_period_message = 0;
-const unsigned long interval_message = 3600000;
-bool alertSent = false;
-bool systemActive = false; // Global system state
+// ===== PIN DEFINITIONS =====
+#define RELAY_X1 PA3
+#define RELAY_X2 PA4
+const int RELAY_FAN = PA1;
 
-// Global sensor values - read once per loop
+// ===== SIM SETUP =====
+const String phoneNumber = "+84814686688"; // alert phone number
+
+// ===== TIMING VARIABLES =====
+unsigned long last_test_action = 0;
+const unsigned long interval_test_action = 10000;    // Test interval (10 seconds)
+unsigned long last_sensor_read = 0;
+const unsigned long interval_sensor_read = 2000;     // Sensor read interval (2 seconds)
+
+// ===== SYSTEM STATE =====
+bool systemActive = false;
+bool systemInitialized = false;
+
+// ===== GLOBAL SENSOR VALUES =====
 float g_lux = 0.0;
 float g_temperature = 0.0;
 float g_humidity = 0.0;
@@ -27,159 +36,185 @@ int g_soilMoisture = 0;
 uint16_t g_co2 = 0;
 bool g_dataReady = false;
 
-void activate_System() {
-  systemActive = true;
-  last_period_message = millis();
-  close_System();
-  
-  if(g_dataReady) {
-    Serial.println("----- Du lieu cam bien -----");
-    Serial.print("Anh sang: ");
-    Serial.print(g_lux);
-    Serial.println(" Lux");
+// ===== ACTUATOR STATE MACHINE (NON-BLOCKING) =====
+enum ActuatorState { STOPPED, RETRACTING, EXTENDING };
+ActuatorState currentActuatorState = STOPPED;
+unsigned long actuatorMoveStartTime = 0;
+const unsigned long ACTUATOR_RUN_TIME = 1000; // Thời gian chạy của Piston (1 giây)
 
-    Serial.print("Nhiet do SHT30: ");
-    Serial.print(g_temperature);
-    Serial.println(" C");
+void printSensorData();
 
-    Serial.print("Do am SHT30: ");
-    Serial.print(g_humidity);
-    Serial.println(" %");
+void stopActuator() {
+  digitalWrite(RELAY_X1, LOW);
+  digitalWrite(RELAY_X2, LOW);
+  currentActuatorState = STOPPED;
+}
 
-    Serial.print("CO2 SCD40: ");
-    Serial.print(g_co2);
-    Serial.println(" ppm");
+void triggerRetractActuator() {
+  Serial.println("[ACTUATOR] Dang thu Pittong vao...");
+  digitalWrite(RELAY_X1, LOW);
+  digitalWrite(RELAY_X2, HIGH);
+  currentActuatorState = RETRACTING;
+  actuatorMoveStartTime = millis();
+}
 
-    Serial.print("Ap suat BME280: ");
-    Serial.print(g_pressure);
-    Serial.println(" hPa");
+void triggerExtendActuator() {
+  Serial.println("[ACTUATOR] Dang day Pittong ra...");
+  digitalWrite(RELAY_X1, HIGH); 
+  digitalWrite(RELAY_X2, LOW);
+  currentActuatorState = EXTENDING;
+  actuatorMoveStartTime = millis();
+}
 
-    Serial.print("Gia tri khi MQ-4: ");
-    Serial.println(g_gasValue);
-
-    Serial.print("Do am dat: ");
-    Serial.print(g_soilMoisture);
-    Serial.println(" (0-1023)");
-
-    delay(3000);
-  } else {
-    Serial.println("Du lieu CO2 chua san sang, bo qua lan doc nay.");
-    delay(1000);
+// Hàm này phải được gọi liên tục trong loop() để theo dõi thời gian Pittong chạy
+void handleActuatorTask() {
+  if (currentActuatorState != STOPPED) {
+    if (millis() - actuatorMoveStartTime >= ACTUATOR_RUN_TIME) {
+      stopActuator(); // Đủ 1 giây thì tự động dừng
+      Serial.println("[ACTUATOR] Da hoan thanh va dung lai.");
+    }
   }
-  Serial.print("Activated");
+}
+
+// ===== SYSTEM ACTIVATION/DEACTIVATION =====
+void activate_System() {
+  if (systemActive) return;  
+  
+  systemActive = true;
+  Serial.println("\n----- KICH HOAT HE THONG (TEST MODE) -----");
+  
+  // Kích hoạt quạt và thu Pittong
+  digitalWrite(RELAY_FAN, HIGH);
+  triggerRetractActuator(); 
 }
 
 void deactivate_System() {
+  if (!systemActive) return;  
+  
   systemActive = false;
-  open_System();
-  Serial.print("Deactivated");
-
-}
-
-void sms_sent_callback() {
-  if (g_dataReady) {
-    String message = "information at n times:\n";
-    message += "Temp: " + String(g_temperature) + " C\n";
-    message += "Hum: " + String(g_humidity) + " %\n";
-    message += "Gas: " + String(g_gasValue) + "\n";
-    message += "Soil: " + String(g_soilMoisture) + "%\n";
-    message += "Light: " + String(g_lux) + " Lux\n";
-    message += "Pressure: " + String(g_pressure) + " hPa";
-    sendSMS_Alert(phoneNumber, message);
-    Serial.println("Periodic SMS alert sent.");
-  }
-  else{
-    Serial.println("Data not ready, SMS alert not sent.");
-  }
-
-  delay(1000);
-  updateSIM_Connection();
-      
-
-
-}
-
-void setup() {
-
-  Serial.begin(115200);
-  delay(2000);
-
-// i2c setup
-  Wire.begin();
-
-  // Cấu hình chân Relay và LED` 
-
-  Serial.println(" DANG KHOI TAO HE THONG CAM BIEN ");
-  setupSIM_A7680();
-  setup_Actuators();
-  setupBH1750_Sensor();
-  setupSHT30_Sensor();
-  setupSCD40_Sensor();
-  setupBME280_Sensor();
+  Serial.println("\n----- TAT HE THONG (TEST MODE) -----");
   
-  Serial.println(" HE THONG DA SAN SANG ");
+  // Tắt quạt và đẩy Pittong
+  digitalWrite(RELAY_FAN, LOW);
+  triggerExtendActuator();
 }
 
-void loop() {
-  
-  check_PhysicalButtons();
+void printSensorData() {
+  Serial.println("--- Du lieu cam bien ---");
+  Serial.print("Anh sang: "); Serial.print(g_lux); Serial.println(" Lux");
+  Serial.print("Nhiet do: "); Serial.print(g_temperature); Serial.println(" C");
+  Serial.print("Do am: "); Serial.print(g_humidity); Serial.println(" %");
+  Serial.print("CO2 SCD40: "); Serial.print(g_co2); Serial.println(" ppm");
+  Serial.print("Ap suat: "); Serial.print(g_pressure); Serial.println(" hPa");
+  Serial.print("Khi Gas: "); Serial.println(g_gasValue);
+  Serial.print("Do am dat: "); Serial.print(g_soilMoisture); Serial.println(" %");
+  Serial.println("------------------------");
+}
+
+// ===== SENSOR DATA READING FUNCTION =====
+void readAllSensors() {
   unsigned long currentMillis = millis();
-  // --- Read all sensor values once per loop ---
+  
+  // Chỉ đọc sensor sau mỗi 2 giây để tránh kẹt Bus I2C
+  if (currentMillis - last_sensor_read < interval_sensor_read) {
+    return;
+  }
+  last_sensor_read = currentMillis;
+  
+  // Đọc Analog
+  g_gasValue = readMQ4_Gas();
+  g_soilMoisture = readSoil_Moisture();
+  
+  // Đọc I2C
   g_lux = readBH1750_Lux();
   readSHT30_Data(g_temperature, g_humidity);
   g_pressure = readBME280_Pressure();
-  g_gasValue = readMQ4_Gas();
-  g_soilMoisture = readSoil_Moisture();
+  
+  // Đọc CO2 (Lấy luôn dữ liệu không cần ép điều kiện logic cho logic chính)
   g_dataReady = isSCD40_DataReady();
   if (g_dataReady) {
     g_co2 = readSCD40_CO2();
   }
+}
 
-  // --- In dữ liệu ra Serial Monitor --- (control on Serial)
-  if (Serial.available()){
-    char command = Serial.read();
-    switch (command)
-    {
-    case 1:
-    //open door and stop system
-      delay(500); // debounce
-      deactivate_System();
-      break;
-    case 2:
-    // sent message to phone number
-      delay(500); // debounce
-      sms_sent_callback();
-      break;
-    default:
-    // close door and activate system
-      delay(500); // debounce
-      activate_System();
-      break;
-    }
-  }
-
-  // --- Logic control  --- (communication module)
-  if (systemActive && g_dataReady) {
-    control_Fan(true);
-    if (currentMillis - last_period_message >= interval_message) {
-      String message = "information at n times:\n";
-      message += "CO2: " + String(g_co2) + " ppm\n";
-      message += "Temp: " + String(g_temperature) + " C\n";
-      message += "Hum: " + String(g_humidity) + " %\n";
-      message += "Gas: " + String(g_gasValue) + "\n";
-      message += "Soil: " + String(g_soilMoisture) + "%\n";
-      message += "Light: " + String(g_lux) + " Lux\n";
-      message += "Pressure: " + String(g_pressure) + " hPa";
-      alertSent = true;
-      sendSMS_Alert(phoneNumber, message);
-      last_period_message = currentMillis;
-    }
-  } else {
-    control_Fan(false);
-    alertSent = false;
-  }
+// ===== SMS ALERT FUNCTION =====
+void sendSensorDataSMS() {
+  String message = "TEST MODE - Greenhouse DATA:\n";
+  message += "Temp: " + String(g_temperature) + "C\n";
+  message += "Hum: " + String(g_humidity) + "%\n";
+  message += "CO2: " + String(g_co2) + "ppm\n";
+  message += "Light: " + String(g_lux) + "Lx\n";
+  message += "Gas: " + String(g_gasValue);
   
-  updateSIM_Connection();
+  sendSMS_Alert(phoneNumber, message);
+  Serial.println("[SMS] Da gui tin nhan test he thong.");
+}
 
-  delay(2000); 
+// ===== SETUP FUNCTION =====
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
+  
+  // Setup Fan & Actuator Pins
+  pinMode(RELAY_FAN, OUTPUT);
+  digitalWrite(RELAY_FAN, LOW);
+  
+  pinMode(RELAY_X1, OUTPUT);
+  pinMode(RELAY_X2, OUTPUT);
+  stopActuator();
+  
+  // Setup I2C
+  Wire.begin();
+  Serial.println("\n========== SMART GREENHOUSE (TEST MODE) ==========");
+  Serial.println("DANG KHOI TAO CAM BIEN...");
+  
+  setupBH1750_Sensor(); delay(100);
+  setupSHT30_Sensor();  delay(100);
+  setupSCD40_Sensor();  delay(100);
+  setupBME280_Sensor(); delay(100);
+  
+  Serial.println("DANG KHOI TAO SIM MODULE...");
+  setupSIM_A7680();
+  
+  Serial.println("HE THONG DA SAN SANG!");
+  Serial.println("==================================================");
+  
+  systemInitialized = true;
+  systemActive = false;
+  last_test_action = millis(); // Bắt đầu đếm thời gian test
+}
+
+// ===== MAIN LOOP =====
+void loop() {
+  unsigned long currentMillis = millis();
+  
+  // 1. Luôn luôn cập nhật cảm biến (không bao giờ bị kẹt)
+  readAllSensors();
+  
+  // 2. Cập nhật trạng thái Pittong (Tự động ngắt sau 1s)
+  handleActuatorTask();
+
+  
+  // 3. LOGIC TEST: Cứ đúng 10 giây đảo trạng thái và gửi thông tin 1 lần (Bỏ qua CO2)
+  if (systemInitialized) {
+    if (currentMillis - last_test_action >= interval_test_action) {
+      last_test_action = currentMillis;
+      
+      if (!systemActive) {
+        activate_System();
+        sendSensorDataSMS(); // Gửi khi BẬT
+      } else {
+        deactivate_System();
+        sendSensorDataSMS(); // Gửi khi TẮT
+      }
+    }
+  }
+
+  printSensorData(); // In dữ liệu cảm biến liên tục để theo dõi (bỏ qua CO2 nếu chưa sẵn sàng)
+  
+  // 4. CẬP NHẬT MODULE SIM
+  updateSIM_Connection();
+  
+  // Delay cực nhỏ 10ms để tránh watchdog reset (không ảnh hưởng hệ thống)
+  delay(10);
 }
