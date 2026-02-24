@@ -1,8 +1,14 @@
 #include "gadget.h"
 
 // --- CẤU HÌNH HỆ THỐNG ---
+unsigned long  start_time = 0;
+bool flag_system_active = false; // Biến cờ để theo dõi trạng thái hệ thống
+
 // Active High: HIGH = ON, LOW = OFF
 void setup_Actuators() {
+    digitalWrite(FAN_RELAY, LOW);
+
+
     pinMode(FAN_RELAY, OUTPUT);
     pinMode(PISTON_IN1, OUTPUT);
     pinMode(PISTON_IN2, OUTPUT);
@@ -10,9 +16,7 @@ void setup_Actuators() {
     pinMode(BUTTON_CLOSE_PIN, INPUT_PULLUP);
 
     // Mặc định TẮT hết khi khởi động (Mức LOW cho Active High)
-    digitalWrite(FAN_RELAY, LOW);
-    digitalWrite(PISTON_IN1, LOW);
-    digitalWrite(PISTON_IN2, LOW);
+    
 }
 
 // --- ĐIỀU KHIỂN XILANH (Sử dụng cầu H) ---
@@ -47,35 +51,43 @@ void turn_Fan_OFF() {
 
 
 // --- LOGIC ĐÓNG/MỞ HỆ THỐNG ---
-void open_System() {
+void deactivate_system() {
     Serial.println("--- DANG MO HE THONG ---");
-    extend_Piston();
-    delay(2000); // Chờ xilanh chạy hết hành trình
-    stop_Piston();
     turn_Fan_OFF();
+    extend_Piston();// Chờ xilanh chạy hết hành trình
+    start_time = millis(); // Thời gian này có thể điều chỉnh tùy theo tốc độ xilanh
+    flag_system_active = true;
 }
 
-void close_System() {
+void activate_system() {
     Serial.println("--- DANG DONG HE THONG ---");
-    turn_Fan_OFF();
-    delay(500);
+    turn_Fan_ON();
     retract_Piston();
-    delay(2000);
-    stop_Piston();
+    start_time = millis(); // Thời gian này có thể điều chỉnh tùy theo tốc độ xilanh
+    flag_system_active = false; 
 }
 
+void update_actuators() {
+    if (flag_system_active) {
+        // Nếu hệ thống đang mở, kiểm tra thời gian để đóng lại
+        if (millis() - start_time >= 8000) { // 30 giây
+            stop_Piston(); // Dừng xilanh sau khi đã mở đủ thời gian
+            flag_system_active = false; // Reset cờ sau khi đã đóng hệ thống
+        }
+    }
+}
 
 
 
 // --- KIỂM TRA NÚT BẤM VẬT LÝ ---
 void check_PhysicalButtons() {
     if (digitalRead(BUTTON_OPEN_PIN) == LOW) { // Nhấn nút Open
-        open_System();
+        deactivate_system();
         delay(500); // Chống dội phím      
     }
     
     if (digitalRead(BUTTON_CLOSE_PIN) == LOW) { // Nhấn nút Close
-        close_System();
+        activate_system();
         delay(500);
     }
 }

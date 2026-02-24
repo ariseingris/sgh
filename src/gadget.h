@@ -14,8 +14,6 @@
 
 // Khai báo các hàm
 void setup_Actuators();
-void open_System();
-void close_System();
 void extend_Piston();
 void retract_Piston();
 void stop_Piston();
@@ -23,5 +21,8 @@ void turn_Fan_ON();
 void turn_Fan_OFF();
 void check_PhysicalButtons();
 void toggle_StatusLED();
+void update_actuators();
+void deactivate_system();
+void activate_system();
 
 #endif
