@@ -103,6 +103,7 @@ void setup() {
   setupSCD40_Sensor();
   setupBME280_Sensor();
   setup_Actuators(); // Setup actuators (Fan, Piston)
+  setupSIM_A7680(); // Setup SIM module
   
   Serial.println(" HE THONG DA SAN SANG ");
   stop_Piston();

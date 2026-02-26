@@ -8,5 +8,6 @@ void setupSIM_A7680();
 void updateSIM_Connection();
 void sendSMS_Alert(String phoneNumber, String message);
 void sendDataToThinkSpeak(float temp, float hum, uint16_t co2); // Ví dụ gửi lên Cloud
+void clearSIMBuffer();
 
 #endif
