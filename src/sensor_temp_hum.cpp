@@ -8,7 +8,6 @@ Adafruit_SHT31 sht30 = Adafruit_SHT31();
 
 void setupSHT30_Sensor() {
     if(sht30.begin(0x44)) {   // Địa chỉ I2C mặc định của SHT30 là 0x44
-        Serial.println("SHT30 khoi tao thanh cong!");
     } else {
         Serial.println("Loi: Khong the tim thay SHT30!");
     }
