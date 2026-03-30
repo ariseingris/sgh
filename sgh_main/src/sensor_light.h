@@ -5,5 +5,6 @@
 
 void setupBH1750_Sensor();
 float readBH1750_Lux();
+bool isBH1750_Ready();
 
 #endif

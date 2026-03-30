@@ -16,7 +16,16 @@ void setupSCD40_Sensor() {
 uint16_t readSCD40_CO2() {
     uint16_t co2 = 0;
     float t, h;
-    scd4x.readMeasurement(co2, t, h);
+    uint16_t error = scd4x.readMeasurement(co2, t, h);
+    if (error) {
+        Serial.print("[SCD40] readMeasurement error: ");
+        Serial.println(error);
+        return 0;
+    }
+    if (co2 == 0) {
+        Serial.println("[SCD40] CO2=0 — measurement not valid yet");
+        return 0;
+    }
     return co2;
 }
 bool isSCD40_DataReady() {

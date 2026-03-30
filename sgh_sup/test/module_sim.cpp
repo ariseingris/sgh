@@ -1,51 +1,65 @@
 // ============================================================
 //  module_sim.cpp  —  STM32-B  Gateway node
+//
+//  Key design decisions:
+//    - SIM UART (USART1 PA9/PA10) is NEVER read raw in user code.
+//      TinyGSM owns it entirely. updateSIM_Connection() is
+//      removed — it was starving TinyGSM's buffer.
+//    - STM32-A UART (USART2) is read only in main.cpp loop.
+//      module_sim only writes to it (forward commands).
+//    - HTTP uses a second TinyGsmClient (gsmClientHTTP) so
+//      MQTT and HTTP never share the same TCP socket object.
+//    - publishSensorMQTT() is called from onDataFromA() here,
+//      not left dangling as in the old code.
 // ============================================================
+
 #include "module_sim.h"
 
 // -------------------------------------------------------
-//  Serial ports
-//  HardwareSerial(RX_pin, TX_pin)
+//  USART1  ->  SIM A7680C  (PA10 RX, PA9 TX)
+//  Uses defines from module_sim.h so wiring is one source of truth.
 // -------------------------------------------------------
-static HardwareSerial SerialSIM(SIM_RX_PIN,   SIM_TX_PIN);     // USART2
-HardwareSerial        SerialA  (STM32A_RX_PIN, STM32A_TX_PIN); // USART1
+static HardwareSerial SerialSIM(SIM_RX_PIN, SIM_TX_PIN);   // PA10, PA9
 
+// -------------------------------------------------------
+//  USART2  ->  STM32-A  (PA3 RX, PA2 TX)
+//  Per hardware diagram: B-PA2→A-PA9(RX), B-PA3←A-PA10(TX)
+//  Exposed via extern so main.cpp can read it directly.
+// -------------------------------------------------------
+HardwareSerial SerialA(STM32A_RX_PIN, STM32A_TX_PIN);      // PA3, PA2
 // -------------------------------------------------------
 //  TinyGSM + MQTT
 // -------------------------------------------------------
-TinyGsm       modem(SerialSIM);
-TinyGsmClient gsmClientMQTT(modem, 0);   // channel 0 — MQTT
-TinyGsmClient gsmClientHTTP(modem, 1);   // channel 1 — HTTP alerts
-PubSubClient  mqttClient(gsmClientMQTT);
+TinyGsm        modem(SerialSIM);
+TinyGsmClient  gsmClientMQTT(modem, 0);  // channel 0 — for MQTT
+TinyGsmClient  gsmClientHTTP(modem, 1);   // channel 1 — for HTTP alerts
+PubSubClient   mqttClient(gsmClientMQTT);
 
 // -------------------------------------------------------
 //  HTTP client (ntfy.sh)
-//  BUG FIX: httpClient is no longer a static object.
-//  ArduinoHttpClient does not reliably reconnect after stop()
-//  when constructed as a static — the host/port state becomes
-//  stale on the second call.  We reconstruct it fresh inside
-//  sendHttpAlert() each time so the TCP handshake is clean.
 // -------------------------------------------------------
-// (httpClient is now a local variable inside sendHttpAlert)
+static HttpClient httpClient(gsmClientHTTP, NTFY_HOST, NTFY_PORT);
 
 // -------------------------------------------------------
 //  Internal state
 // -------------------------------------------------------
-static bool          gprsConnected       = false;
-static unsigned long lastMqttReconnectMs = 0;
-static unsigned long lastGprsCheckMs     = 0;
+static bool          gprsConnected          = false;
+static unsigned long lastMqttReconnectMs    = 0;
+static unsigned long lastGprsCheckMs        = 0;
 
 // ============================================================
 //  forwardCommandToA()
+//  Sends a newline-terminated command string to STM32-A.
 // ============================================================
 static void forwardCommandToA(const String& cmd) {
     SerialA.println(cmd);
-    rttDebug.print("[FWD→A] ");
-    rttDebug.println(cmd);
+    Serial.print("[FWD→A] ");
+    Serial.println(cmd);
 }
 
 // ============================================================
 //  publishACK()
+//  Sends ACK back to MQTT broker after forwarding a command.
 // ============================================================
 static void publishACK(const String& cmd) {
     if (!mqttClient.connected()) return;
@@ -56,14 +70,15 @@ static void publishACK(const String& cmd) {
 
 // ============================================================
 //  mqttCallback()
+//  Receives commands from broker → forwards to STM32-A.
 // ============================================================
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
     String msg = "";
     for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
     msg.trim();
 
-    rttDebug.print("[MQTT←] ");
-    rttDebug.println(msg);
+    Serial.print("[MQTT←] ");
+    Serial.println(msg);
 
     const char* validCmds[] = {
         "SYSTEM_ON", "SYSTEM_OFF",
@@ -77,7 +92,7 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
             return;
         }
     }
-    rttDebug.println("[MQTT←] Unknown command, ignored.");
+    Serial.println("[MQTT←] Unknown command, ignored.");
 }
 
 // ============================================================
@@ -87,23 +102,19 @@ void connectMQTT() {
     mqttClient.setServer(MQTT_BROKER, MQTT_PORT);
     mqttClient.setCallback(mqttCallback);
     mqttClient.setBufferSize(512);
-    mqttClient.setKeepAlive(MQTT_KEEPALIVE);
 
-    rttDebug.print("[MQTT] Connecting to ");
-    rttDebug.print(MQTT_BROKER);
-    rttDebug.print("...");
+    Serial.print("[MQTT] Connecting to ");
+    Serial.print(MQTT_BROKER);
+    Serial.print("...");
 
-    // BUG FIX: MQTT_USER / MQTT_PASS are nullptr (anonymous).
-    // Passing empty string "" sets the username flag in the CONNECT
-    // packet with a zero-length username, which some brokers reject.
     if (mqttClient.connect(MQTT_CLIENT_ID, MQTT_USER, MQTT_PASS)) {
-        rttDebug.println(" OK");
+        Serial.println(" OK");
         mqttClient.subscribe(MQTT_TOPIC_CONTROL);
         mqttClient.publish(MQTT_TOPIC_SENSORS,
             "{\"status\":\"online\",\"device\":\"STM32B_GW\"}");
     } else {
-        rttDebug.print(" FAILED, state=");
-        rttDebug.println(mqttClient.state());
+        Serial.print(" FAILED, state=");
+        Serial.println(mqttClient.state());
     }
 }
 
@@ -116,50 +127,59 @@ void setupSIM_A7680() {
 
     SerialSIM.begin(SIM_BAUD);
 
-    rttDebug.println("[SIM] Waiting for modem cold-boot (8s)...");
+    // -------------------------------------------------------
+    //  Cold-boot wait: A7680C emits "RDY" ~3-5s after power-on.
+    //  Give it 8s before touching it so the UART is stable.
+    // -------------------------------------------------------
+    Serial.println("[SIM] Waiting for modem cold-boot (8s)...");
     delay(8000);
 
-    rttDebug.println("[SIM] Probing modem (testAT)...");
+    // -------------------------------------------------------
+    //  Probe before restart. If modem is already alive, skip
+    //  the hard restart (restart() causes another ~10s dead window).
+    // -------------------------------------------------------
+    Serial.println("[SIM] Probing modem (testAT)...");
     if (!modem.testAT(3000)) {
-        rttDebug.println("[SIM] No response — sending restart...");
+        Serial.println("[SIM] No response — sending restart...");
         modem.restart();
-        rttDebug.println("[SIM] Waiting post-restart (10s)...");
+        Serial.println("[SIM] Waiting post-restart (10s)...");
         delay(10000);
         if (!modem.testAT(5000)) {
-            rttDebug.println("[SIM] ERROR: Modem not responding. Check PA2/PA3 wiring and power.");
+            Serial.println("[SIM] ERROR: Modem not responding. Check PA9/PA10 wiring and power.");
             forwardCommandToA("ERR:MODEM_NO_RESPONSE");
             return;
         }
     }
-    rttDebug.println("[SIM] Modem alive.");
+    Serial.println("[SIM] Modem alive.");
 
+    // Lock baud rate in NVM so it survives power cycles
     modem.sendAT(GF("+IPR=115200"));
     modem.waitResponse(1000);
 
-    rttDebug.print("[SIM] Modem: ");
-    rttDebug.println(modem.getModemInfo());
-    rttDebug.print("[SIM] IMEI:  ");
-    rttDebug.println(modem.getIMEI());
+    Serial.print("[SIM] Modem: ");
+    Serial.println(modem.getModemInfo());
+    Serial.print("[SIM] IMEI:  ");
+    Serial.println(modem.getIMEI());
 
-    rttDebug.println("[SIM] Waiting for GSM network (max 60s)...");
+    Serial.println("[SIM] Waiting for GSM network (max 60s)...");
     if (!modem.waitForNetwork(SIM_NETWORK_TIMEOUT_MS)) {
-        rttDebug.println("[SIM] ERROR: No GSM network.");
+        Serial.println("[SIM] ERROR: No GSM network.");
         forwardCommandToA("ERR:NO_GSM_NETWORK");
         return;
     }
-    rttDebug.print("[SIM] GSM OK. Signal: ");
-    rttDebug.println(modem.getSignalQuality());
+    Serial.print("[SIM] GSM OK. Signal: ");
+    Serial.println(modem.getSignalQuality());
 
-    rttDebug.print("[SIM] Connecting GPRS (APN=");
-    rttDebug.print(SIM_APN);
-    rttDebug.println(")...");
+    Serial.print("[SIM] Connecting GPRS (APN=");
+    Serial.print(SIM_APN);
+    Serial.println(")...");
     if (modem.gprsConnect(SIM_APN, SIM_APN_USER, SIM_APN_PASS)) {
         gprsConnected = true;
-        rttDebug.print("[SIM] GPRS OK. IP: ");
-        rttDebug.println(modem.getLocalIP());
+        Serial.print("[SIM] GPRS OK. IP: ");
+        Serial.println(modem.getLocalIP());
         forwardCommandToA("INFO:GPRS_OK");
     } else {
-        rttDebug.println("[SIM] ERROR: GPRS failed.");
+        Serial.println("[SIM] ERROR: GPRS failed.");
         forwardCommandToA("ERR:GPRS_FAIL");
         return;
     }
@@ -174,11 +194,11 @@ void setupSIM_A7680() {
 void maintainGPRS() {
     if (!modem.isGprsConnected()) {
         gprsConnected = false;
-        rttDebug.println("[SIM] GPRS lost. Reconnecting...");
+        Serial.println("[SIM] GPRS lost. Reconnecting...");
         forwardCommandToA("ERR:GPRS_LOST");
         if (modem.gprsConnect(SIM_APN, SIM_APN_USER, SIM_APN_PASS)) {
             gprsConnected = true;
-            rttDebug.println("[SIM] GPRS reconnected.");
+            Serial.println("[SIM] GPRS reconnected.");
             forwardCommandToA("INFO:GPRS_RECONNECTED");
         } else {
             forwardCommandToA("ERR:GPRS_RECONNECT_FAIL");
@@ -188,11 +208,12 @@ void maintainGPRS() {
 
 // ============================================================
 //  publishSensorMQTT()
+//  Builds JSON and publishes to MQTT_TOPIC_SENSORS.
 // ============================================================
 static void publishSensorMQTT(float temp, float hum, uint16_t co2,
                                float lux, float pressure, int gas, int soil) {
     if (!mqttClient.connected()) {
-        rttDebug.println("[MQTT] Not connected — skipping publish.");
+        Serial.println("[MQTT] Not connected — skipping publish.");
         return;
     }
     char payload[256];
@@ -202,124 +223,106 @@ static void publishSensorMQTT(float temp, float hum, uint16_t co2,
         temp, hum, co2, lux, pressure, gas, soil);
 
     if (mqttClient.publish(MQTT_TOPIC_SENSORS, payload)) {
-        rttDebug.print("[MQTT→] ");
-        rttDebug.println(payload);
+        Serial.print("[MQTT→] ");
+        Serial.println(payload);
     } else {
-        rttDebug.println("[MQTT→] Publish failed.");
+        Serial.println("[MQTT→] Publish failed.");
     }
-}
-
-// ============================================================
-//  parseCSVField()
-// ============================================================
-static float parseCSVField(const String& s, int* pos) {
-    int comma = s.indexOf(',', *pos);
-    String token;
-    if (comma == -1) {
-        token = s.substring(*pos);
-        *pos  = s.length();
-    } else {
-        token = s.substring(*pos, comma);
-        *pos  = comma + 1;
-    }
-    token.trim();
-    return token.length() > 0 ? token.toFloat() : 0.0f;
 }
 
 // ============================================================
 //  onDataFromA()
+//  Parse "DATA:<temp>,<hum>,<co2>,<lux>,<pressure>,<gas>,<soil>"
+//  then publish to MQTT.
 // ============================================================
 void onDataFromA(const String& csvLine) {
-    int pos = 0;
-    float temp     = parseCSVField(csvLine, &pos);
-    float hum      = parseCSVField(csvLine, &pos);
-    float co2_f    = parseCSVField(csvLine, &pos);
-    float lux      = parseCSVField(csvLine, &pos);
-    float pressure = parseCSVField(csvLine, &pos);
-    float gas_f    = parseCSVField(csvLine, &pos);
-    float soil_f   = parseCSVField(csvLine, &pos);
+    // csvLine = "28.3,65.0,412,1200.0,1013.2,320,540"
+    float    temp = 0, hum = 0, lux = 0, pressure = 0;
+    uint16_t co2  = 0;
+    int      gas  = 0, soil = 0;
 
-    rttDebug.print("[DATA] T="); rttDebug.print(temp);
-    rttDebug.print(" H=");       rttDebug.print(hum);
-    rttDebug.print(" CO2=");     rttDebug.print((int)co2_f);
-    rttDebug.print(" Lux=");     rttDebug.print(lux);
-    rttDebug.print(" P=");       rttDebug.print(pressure);
-    rttDebug.print(" Gas=");     rttDebug.print((int)gas_f);
-    rttDebug.print(" Soil=");    rttDebug.println((int)soil_f);
+    int n = sscanf(csvLine.c_str(),
+                   "%f,%f,%hu,%f,%f,%d,%d",
+                   &temp, &hum, &co2, &lux, &pressure, &gas, &soil);
 
-    publishSensorMQTT(temp, hum, (uint16_t)co2_f,
-                      lux, pressure, (int)gas_f, (int)soil_f);
+    if (n == 7) {
+        publishSensorMQTT(temp, hum, co2, lux, pressure, gas, soil);
+    } else {
+        Serial.print("[DATA] Parse error, fields=");
+        Serial.println(n);
+    }
 }
 
 // ============================================================
 //  sendHttpAlert()
-//
-//  BUG FIX: HttpClient is now constructed locally on each call.
-//  A static HttpClient wrapping a TinyGsmClient does not reliably
-//  reconnect after stop() — the second POST would fail because
-//  the ArduinoHttpClient state machine still thinks the TCP
-//  connection is open.  Creating a fresh local instance forces
-//  a clean TCP handshake every time.
+//  HTTP POST to ntfy.sh.
+//  Returns true on success.
+//  Uses gsmClientHTTP (channel 1) — independent of MQTT.
 // ============================================================
 bool sendHttpAlert(const String& message) {
     if (!gprsConnected) {
-        rttDebug.println("[HTTP] No GPRS — alert not sent.");
+        Serial.println("[HTTP] No GPRS — alert not sent.");
         return false;
     }
 
-    rttDebug.println("[HTTP] Sending alert to ntfy.sh...");
-
-    // Fresh HttpClient instance each call — see bug fix note above.
-    HttpClient httpClient(gsmClientHTTP, NTFY_HOST, NTFY_PORT);
-    httpClient.setTimeout(HTTP_TIMEOUT_MS);
+    Serial.println("[HTTP] Sending alert to ntfy.sh...");
 
     String path = "/";
     path += NTFY_TOPIC;
 
+    httpClient.setTimeout(HTTP_TIMEOUT_MS);
     int err = httpClient.post(path, "text/plain", message);
+
     if (err != 0) {
-        rttDebug.print("[HTTP] Connection error: ");
-        rttDebug.println(err);
-        httpClient.stop();
+        Serial.print("[HTTP] Connection error: ");
+        Serial.println(err);
         return false;
     }
 
     int statusCode = httpClient.responseStatusCode();
-    httpClient.responseBody();   // drain response body
+    httpClient.responseBody();   // drain the body
     httpClient.stop();
 
-    rttDebug.print("[HTTP] ntfy response: ");
-    rttDebug.println(statusCode);
+    Serial.print("[HTTP] ntfy response: ");
+    Serial.println(statusCode);
     return (statusCode >= 200 && statusCode < 300);
 }
 
 // ============================================================
 //  onAlertFromA()
+//  Parse "ALERT:<phone>,<message>" and POST to ntfy.sh.
+//  The phone field is included in the ntfy title header
+//  (ntfy doesn't actually send SMS — it pushes to the app).
 // ============================================================
 void onAlertFromA(const String& phone, const String& message) {
-    rttDebug.print("[ALERT] phone=");
-    rttDebug.print(phone);
-    rttDebug.print(" msg=");
-    rttDebug.println(message);
+    Serial.print("[ALERT] phone=");
+    Serial.print(phone);
+    Serial.print(" msg=");
+    Serial.println(message);
 
+    // ntfy supports a Title header but ArduinoHttpClient's simple
+    // post() doesn't set custom headers easily.  We include the
+    // phone in the body for now; use beginRequest/endRequest for headers.
     String body = "[" + phone + "] " + message;
 
     if (sendHttpAlert(body)) {
-        rttDebug.println("[ALERT] Sent OK.");
+        Serial.println("[ALERT] Sent OK.");
         if (mqttClient.connected()) {
             mqttClient.publish(MQTT_TOPIC_ACK, "{\"alert\":\"sent\"}");
         }
     } else {
-        rttDebug.println("[ALERT] Failed.");
+        Serial.println("[ALERT] Failed.");
     }
 }
 
 // ============================================================
 //  loopGateway()
+//  Call every loop().
 // ============================================================
 void loopGateway() {
     unsigned long now = millis();
 
+    // GPRS watchdog
     if (now - lastGprsCheckMs >= GPRS_CHECK_INTERVAL) {
         lastGprsCheckMs = now;
         maintainGPRS();
@@ -327,14 +330,15 @@ void loopGateway() {
 
     if (!gprsConnected) return;
 
+    // MQTT reconnect
     if (!mqttClient.connected()) {
         if (now - lastMqttReconnectMs >= MQTT_RECONNECT_INTERVAL) {
             lastMqttReconnectMs = now;
-            rttDebug.println("[MQTT] Disconnected — reconnecting...");
+            Serial.println("[MQTT] Disconnected — reconnecting...");
             connectMQTT();
         }
         return;
     }
 
-    mqttClient.loop();
+    mqttClient.loop();   // keepalive + incoming message dispatch
 }

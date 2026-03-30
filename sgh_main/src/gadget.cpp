@@ -1,93 +1,123 @@
+// ============================================================
+//  gadget.cpp  —  Actuator control for STM32-A
+//
+//  BUG FIX: check_PhysicalButtons() now uses non-blocking
+//  debounce (timestamp comparison) instead of delay(300).
+//  The old delay() blocked loop() for 300 ms on every button
+//  press, which stalled UART receive, sensor reads, and the
+//  piston auto-stop timer.
+// ============================================================
+
 #include "gadget.h"
 
-// --- CẤU HÌNH HỆ THỐNG ---
-unsigned long  start_time = 0;
-bool flag_system_active = false; // Biến cờ để theo dõi trạng thái hệ thống
+static unsigned long pistonStartMs   = 0;
+static bool          pistonRunning   = false;
+static const unsigned long PISTON_RUN_MS = 8000UL;
 
-// Active High: HIGH = ON, LOW = OFF
+// Non-blocking debounce timestamps for each button
+static unsigned long lastOpenBtnMs  = 0;
+static unsigned long lastCloseBtnMs = 0;
+static const unsigned long DEBOUNCE_MS = 300UL;
+
+// ============================================================
+//  setup_Actuators()
+// ============================================================
 void setup_Actuators() {
-    digitalWrite(FAN_RELAY, LOW);
-
-
-    pinMode(FAN_RELAY, OUTPUT);
-    pinMode(PISTON_IN1, OUTPUT);
-    pinMode(PISTON_IN2, OUTPUT);
-    pinMode(BUTTON_OPEN_PIN, INPUT_PULLUP);
+    pinMode(FAN_RELAY,        OUTPUT);
+    pinMode(PISTON_IN1,       OUTPUT);
+    pinMode(PISTON_IN2,       OUTPUT);
+    pinMode(BUTTON_OPEN_PIN,  INPUT_PULLUP);
     pinMode(BUTTON_CLOSE_PIN, INPUT_PULLUP);
 
-    // Mặc định TẮT hết khi khởi động (Mức LOW cho Active High)
-    
+    digitalWrite(FAN_RELAY,  LOW);
+    digitalWrite(PISTON_IN1, LOW);
+    digitalWrite(PISTON_IN2, LOW);
 }
 
-// --- ĐIỀU KHIỂN XILANH (Sử dụng cầu H) ---
+// ============================================================
+//  Piston (H-bridge)
+// ============================================================
 void extend_Piston() {
-    digitalWrite(PISTON_IN1, HIGH);  
-    digitalWrite(PISTON_IN2, LOW); 
-    Serial.println(">>> XILANH: DAY RA (EXTEND)");
+    digitalWrite(PISTON_IN1, HIGH);
+    digitalWrite(PISTON_IN2, LOW);
+    pistonRunning = true;
+    pistonStartMs = millis();
+    Serial.println(">>> PISTON: EXTEND");
 }
 
 void retract_Piston() {
-    digitalWrite(PISTON_IN1, LOW);  
-    digitalWrite(PISTON_IN2, HIGH); 
-    Serial.println(">>> XILANH: RUT VE (RETRACT)");
+    digitalWrite(PISTON_IN1, LOW);
+    digitalWrite(PISTON_IN2, HIGH);
+    pistonRunning = true;
+    pistonStartMs = millis();
+    Serial.println(">>> PISTON: RETRACT");
 }
 
 void stop_Piston() {
-    digitalWrite(PISTON_IN1, LOW);  
-    digitalWrite(PISTON_IN2, LOW); 
-    Serial.println(">>> XILANH: DUNG");
+    digitalWrite(PISTON_IN1, LOW);
+    digitalWrite(PISTON_IN2, LOW);
+    pistonRunning = false;
+    Serial.println(">>> PISTON: STOP");
 }
 
-// --- ĐIỀU KHIỂN QUẠT ---
+// ============================================================
+//  Fan
+// ============================================================
 void turn_Fan_ON() {
     digitalWrite(FAN_RELAY, HIGH);
-    Serial.println(">>> QUAT: BAT");
+    Serial.println(">>> FAN: ON");
 }
 
 void turn_Fan_OFF() {
     digitalWrite(FAN_RELAY, LOW);
-    Serial.println(">>> QUAT: TAT");
+    Serial.println(">>> FAN: OFF");
 }
 
-
-// --- LOGIC ĐÓNG/MỞ HỆ THỐNG ---
-void deactivate_system() {
-    Serial.println("--- DANG MO HE THONG ---");
-    turn_Fan_OFF();
-    extend_Piston();// Chờ xilanh chạy hết hành trình
-    start_time = millis(); // Thời gian này có thể điều chỉnh tùy theo tốc độ xilanh
-    flag_system_active = true;
-}
-
+// ============================================================
+//  System-level shortcuts
+// ============================================================
 void activate_system() {
-    Serial.println("--- DANG DONG HE THONG ---");
+    Serial.println("--- SYSTEM: ACTIVATE (close) ---");
     turn_Fan_ON();
     retract_Piston();
-    start_time = millis(); // Thời gian này có thể điều chỉnh tùy theo tốc độ xilanh
-    flag_system_active = false; 
 }
 
+void deactivate_system() {
+    Serial.println("--- SYSTEM: DEACTIVATE (open) ---");
+    turn_Fan_OFF();
+    extend_Piston();
+}
+
+// ============================================================
+//  update_actuators()  — call every loop()
+// ============================================================
 void update_actuators() {
-    if (flag_system_active) {
-        // Nếu hệ thống đang mở, kiểm tra thời gian để đóng lại
-        if (millis() - start_time >= 8000) { // 30 giây
-            stop_Piston(); // Dừng xilanh sau khi đã mở đủ thời gian
-            flag_system_active = false; // Reset cờ sau khi đã đóng hệ thống
+    if (pistonRunning && (millis() - pistonStartMs >= PISTON_RUN_MS)) {
+        stop_Piston();
+    }
+}
+
+// ============================================================
+//  check_PhysicalButtons()  — call every loop()
+//
+//  BUG FIX: replaced delay(300) with non-blocking debounce.
+//  delay() would block loop() for 300 ms on every press,
+//  preventing UART reads, sensor polling, and piston auto-stop.
+// ============================================================
+void check_PhysicalButtons() {
+    unsigned long now = millis();
+
+    if (digitalRead(BUTTON_OPEN_PIN) == LOW) {
+        if (now - lastOpenBtnMs >= DEBOUNCE_MS) {
+            lastOpenBtnMs = now;
+            deactivate_system();
         }
     }
-}
 
-
-
-// --- KIỂM TRA NÚT BẤM VẬT LÝ ---
-void check_PhysicalButtons() {
-    if (digitalRead(BUTTON_OPEN_PIN) == LOW) { // Nhấn nút Open
-        deactivate_system();
-        delay(500); // Chống dội phím      
-    }
-    
-    if (digitalRead(BUTTON_CLOSE_PIN) == LOW) { // Nhấn nút Close
-        activate_system();
-        delay(500);
+    if (digitalRead(BUTTON_CLOSE_PIN) == LOW) {
+        if (now - lastCloseBtnMs >= DEBOUNCE_MS) {
+            lastCloseBtnMs = now;
+            activate_system();
+        }
     }
 }

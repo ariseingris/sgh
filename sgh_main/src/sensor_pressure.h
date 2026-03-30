@@ -4,4 +4,6 @@
 
 void setupBME280_Sensor();
 float readBME280_Pressure();
+bool isBME280_Ready();
+
 #endif
