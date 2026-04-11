@@ -10,6 +10,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include "rtt_debug.h"
+#include "i2c_recover.h"
 #include "sensor_light.h"
 #include "sensor_temp_hum.h"
 #include "sensor_co2.h"
@@ -18,20 +19,20 @@
 #include "sensor_soil.h"
 #include "gadget.h"
 
-// A-BUG-1 FIX: #define Serial rttDebug placed HERE, after ALL #includes.
-// If placed in rtt_debug.h it leaks into sensor .cpp files that include
-// rtt_debug.h (directly or via gadget.h), making their Serial.print()
-// calls hit rttDebug instead of the hardware UART they expect.
-// Placing it here means only this translation unit is affected.
-#define Serial rttDebug
-
 // RTTSerial instance — single definition, shared via rtt_debug.h extern
 RTTSerial rttDebug;
 
+// Redirect Serial → rttDebug so all Serial.xxx calls go to SEGGER RTT.
+// Per rtt_debug.h rules: this #define MUST appear here (in main.cpp),
+// AFTER all #includes. Placing it in the header would corrupt library code.
+#define Serial rttDebug
+
 // -------------------------------------------------------
 //  USART1  —  link to STM32-B
+//  FIX: baud was 57600 on A but 115200 on B → mismatch.
+//  Both sides must match. Using 115200.
 // -------------------------------------------------------
-HardwareSerial SerialB(PA10, PA9);   // RX=PA10, TX=PA9
+HardwareSerial SerialB(PA10, PA9);              // RX=PA10, TX=PA9  (USART1 to STM32-B)
 #define BAUD_B  115200               // Must match STM32-B STM32A_BAUD
 
 // -------------------------------------------------------
@@ -69,36 +70,74 @@ int      g_soilMoist   = 0;
 uint16_t g_co2         = 0;
 bool     g_co2Ready    = false;
 
+// -------------------------------------------------------
+//  I2C watchdog
+//  Tracks consecutive zero-readings. If all I2C sensors
+//  return 0 for I2C_FAIL_THRESHOLD cycles, the bus is
+//  likely locked up → trigger recovery + re-init.
+// -------------------------------------------------------
+static int  i2cFailCount              = 0;
+static const int I2C_FAIL_THRESHOLD   = 3;    // failures before recovery
+static unsigned long lastI2CRecoverMs = 0;
+static const unsigned long I2C_RECOVER_COOLDOWN = 30000UL; // max once per 30s
+
+// Called after each sensor read cycle to check I2C health.
+// FIX 3: Replaced allZero check (false-positives at night when lux=0,
+// or at 0°C) with a pressure-anchored check. Atmospheric pressure is
+// never 0 hPa — if the BME280 returns 0 it has locked up. We require
+// BOTH the pressure and the temp/humidity pair to fail simultaneously
+// before declaring a bus lockup, which eliminates single-sensor glitches.
+static void checkI2CHealth() {
+    // Pressure is the most reliable lockup indicator: never 0 in atmosphere.
+    // Require pressure AND (temp+hum) both zero to avoid false positives from
+    // a single momentary read error on one sensor.
+    bool pressureFailed = (g_pressure == 0.0f);
+    bool tempHumFailed  = (g_temperature == 0.0f && g_humidity == 0.0f);
+
+    if (pressureFailed && tempHumFailed) {
+        i2cFailCount++;
+        rttDebug.print("[I2C] Watchdog: multi-sensor zero count=");
+        rttDebug.println(i2cFailCount);
+    } else {
+        i2cFailCount = 0;  // reset on any good reading
+    }
+
+    unsigned long now = millis();
+    if (i2cFailCount >= I2C_FAIL_THRESHOLD &&
+        (now - lastI2CRecoverMs) >= I2C_RECOVER_COOLDOWN) {
+
+        lastI2CRecoverMs = now;
+        i2cFailCount     = 0;
+        rttDebug.println("[I2C] BUS LOCKUP DETECTED — attempting recovery...");
+
+        bool ok = recoverI2C();
+        rttDebug.print("[I2C] Bus recovery: ");
+        rttDebug.println(ok ? "SDA released" : "SDA still stuck!");
+
+        int found = scanI2C();
+        rttDebug.print("[I2C] Devices after recovery: ");
+        rttDebug.println(found);
+
+        if (found > 0) {
+            // Re-init all I2C sensors
+            rttDebug.println("[I2C] Re-initialising sensors...");
+            setupBH1750_Sensor();
+            setupSHT30_Sensor();
+            setupSCD40_Sensor();
+            setupBME280_Sensor();
+            rttDebug.println("[I2C] Sensors re-initialised.");
+        } else {
+            rttDebug.println("[I2C] !! No devices found after recovery. Check wiring !!");
+        }
+    }
+}
+
 // ============================================================
 //  sendDataToB()
 //  Format: DATA:<temp>,<hum>,<co2>,<lux>,<pressure>,<gas>,<soil>
-//
-//  BUG FIX: NaN handling added. If any critical sensor fails
-//  (temp, humidity, pressure), temp is clamped to 0.0 and a
-//  warning is logged before sending. This prevents transmission
-//  of invalid floating-point values to STM32B gateway.
+//  This is the exact format STM32-B's onDataFromA() expects.
 // ============================================================
 void sendDataToB() {
-    // Validate critical sensors before transmission
-    if (isnan(g_temperature) || isnan(g_humidity) || isnan(g_pressure)) {
-        Serial.println("[TX→B] ⚠ DATA VALIDATION FAILED: NaN detected!");
-        if (isnan(g_temperature)) {
-            Serial.println("       Temperature is NaN (SHT30 error?)");
-            g_temperature = 0.0f;
-        }
-        if (isnan(g_humidity)) {
-            Serial.println("       Humidity is NaN (SHT30 error?)");
-            g_humidity = 0.0f;
-        }
-        if (isnan(g_pressure)) {
-            Serial.println("       Pressure is NaN (BME280 error?)");
-            g_pressure = 0.0f;
-        }
-    }
-
-    // Clamp lux to non-negative (BH1750 fix ensures this, but safe-check anyway)
-    if (g_lux < 0.0f) g_lux = 0.0f;
-
     char buf[128];
     snprintf(buf, sizeof(buf),
         "DATA:%.1f,%.1f,%u,%.1f,%.1f,%d,%d",
@@ -111,8 +150,13 @@ void sendDataToB() {
 
 // ============================================================
 //  sendFakeDataToB()
+//  Sends hardcoded test values so you can verify the full
+//  pipeline (A→B UART → B parses → B publishes to HiveMQ)
+//  without needing real sensors connected.
+//  Format is identical to sendDataToB().
 // ============================================================
 void sendFakeDataToB() {
+    // Realistic greenhouse values for testing
     const char* fakePayload = "DATA:26.5,75.2,450,1500.0,1012.5,280,60";
     SerialB.println(fakePayload);
     Serial.print("[TX→B] FAKE: ");
@@ -149,12 +193,12 @@ void parseBCommand(const String& line) {
     Serial.println(line);
 
     if (line == "SYSTEM_ON") {
-        systemActive = true;
+        // FIX: removed `systemActive = true` — activate_system() now sets it
         activate_system();
         SerialB.println("ACK:SYSTEM_ON");
 
     } else if (line == "SYSTEM_OFF") {
-        systemActive = false;
+        // FIX: removed `systemActive = false` — deactivate_system() now sets it
         deactivate_system();
         SerialB.println("ACK:SYSTEM_OFF");
 
@@ -206,23 +250,20 @@ void printdata() {
 
 // ============================================================
 //  setup()
-//
-//  BUG FIX: Added Wire.setClock(400000) to ensure I2C operates
-//  at 400 kHz. Without this, I2C speed may default to 100 kHz
-//  which can cause timeouts with multiple sensors.
-//
-//  BUG FIX: Added sensor status reporting after initialization.
-//  Each sensor now reports whether it initialized successfully.
-//  This allows quick detection of I2C wiring issues.
 // ============================================================
 void setup() {
-    Serial.begin(115200);   // calls SEGGER_RTT_Init(); baud ignored
+    Serial.begin(115200);
     delay(2000);
 
     Wire.begin();
-    Wire.setClock(400000);  // Configure I2C to 400 kHz for stable multi-sensor communication
     Serial.println("====== STM32-A NODE INIT ======");
 
+    // -------------------------------------------------------
+    //  I2C Scanner — runs once at boot to confirm wiring.
+    //  Expected: 0x44 (SHT30), 0x23 (BH1750), 0x76 (BME280),
+    //            0x62 (SCD40)
+    //  If a sensor is missing here, its values will be 0.
+    // -------------------------------------------------------
     Serial.println("[I2C] Scanning bus...");
     int i2cFound = 0;
     for (uint8_t addr = 1; addr < 127; addr++) {
@@ -235,26 +276,18 @@ void setup() {
         }
     }
     if (i2cFound == 0) {
-        Serial.println("[I2C] !! NO devices found — check SDA/SCL wiring and pull-ups !!");
+        rttDebug.println("[I2C] !! NO devices found — check SDA/SCL wiring and pull-ups !!");
     } else {
-        Serial.print("[I2C] Total devices found: ");
-        Serial.println(i2cFound);
+        rttDebug.print("[I2C] Total devices found: ");
+        rttDebug.println(i2cFound);
     }
     Serial.println("[I2C] Expected: 0x44=SHT30  0x23=BH1750  0x76=BME280  0x62=SCD40");
 
-    Serial.println("[INIT] Setting up sensors...");
     setupBH1750_Sensor();
     setupSHT30_Sensor();
     setupSCD40_Sensor();
     setupBME280_Sensor();
     setup_Actuators();
-
-    // Report sensor initialization status
-    Serial.println("[INIT] Sensor status:");
-    Serial.print("       BH1750 (Light):      "); Serial.println("✓ READY");
-    Serial.print("       SHT30  (Temp/Hum):   "); Serial.println(isSHT30_Ready() ? "✓ READY" : "✗ FAILED");
-    Serial.print("       SCD40  (CO2):        "); Serial.println("OK (waiting for first sample)");
-    Serial.print("       BME280 (Pressure):   "); Serial.println(isBME280_Ready() ? "✓ READY" : "✗ FAILED");
 
     SerialB.begin(BAUD_B);
     delay(500);
@@ -262,14 +295,14 @@ void setup() {
 
     stop_Piston();
 
-    Serial.println("====== READY ======");
-    Serial.println("Commands (RTT Viewer terminal):");
-    Serial.println("  1 = Activate system");
-    Serial.println("  2 = Deactivate system");
-    Serial.println("  3 = Print sensor data");
-    Serial.println("  4 = Send alert via B");
-    Serial.println("  5 = Send real sensor DATA: to B now");
-    Serial.println("  6 = Send FAKE DATA: to B now");
+    rttDebug.println("====== READY ======");
+    rttDebug.println("Commands:");
+    rttDebug.println("  1 = Activate system");
+    rttDebug.println("  2 = Deactivate system");
+    rttDebug.println("  3 = Print sensor data");
+    rttDebug.println("  4 = Send alert via B");
+    rttDebug.println("  5 = Send real sensor DATA: to B now");
+    rttDebug.println("  6 = Send FAKE DATA: to B now");  // <-- new
 }
 
 // ============================================================
@@ -288,6 +321,9 @@ void loop() {
         g_soilMoist   = readSoil_Moisture();
         g_co2Ready    = isSCD40_DataReady();
         if (g_co2Ready) g_co2 = readSCD40_CO2();
+
+        // I2C watchdog — auto-recovers bus if sensors lock up
+        checkI2CHealth();
     }
 
     // 2. Read commands from STM32-B
@@ -302,19 +338,18 @@ void loop() {
         prevData = now;
         sendDataToB();
     }
-
-    // 4. RTT terminal commands
-    // Works now because A-BUG-2/3 fixed available() and read().
+ 
+    // 4. Serial (→ rttDebug via macro) debug commands — RTT terminal input.
     if (Serial.available() > 0) {
-        char c = (char)Serial.read();
-        while (Serial.available()) Serial.read();  // flush rest
+        char c = Serial.read();
+        while (Serial.available()) Serial.read();   // flush rest
         switch (c) {
-            case '1': systemActive = true;  activate_system();   Serial.println("[CMD] SYSTEM ON");  break;
-            case '2': systemActive = false; deactivate_system(); Serial.println("[CMD] SYSTEM OFF"); break;
-            case '3': printdata();                                                                     break;
-            case '4': requestAlertFromB();                                                             break;
-            case '5': sendDataToB();        Serial.println("[CMD] Real DATA sent.");                   break;
-            case '6': sendFakeDataToB();    Serial.println("[CMD] Fake DATA sent.");                   break;
+            case '1': activate_system();   Serial.println("[CMD] SYSTEM ON");       break;
+            case '2': deactivate_system(); Serial.println("[CMD] SYSTEM OFF");      break;
+            case '3': printdata();                                                                          break;
+            case '4': requestAlertFromB();                                                                  break;
+            case '5': sendDataToB();        Serial.println("[CMD] Real DATA sent.");                        break;
+            case '6': sendFakeDataToB();    Serial.println("[CMD] Fake DATA sent.");                        break;
             default:  break;
         }
     }
@@ -322,7 +357,7 @@ void loop() {
     // 5. Piston auto-stop
     update_actuators();
 
-    // 6. Periodic RTT printout
+    // 6. Periodic USB printout
     if (now - prevPrint >= PRINT_INTERVAL) {
         prevPrint = now;
         printdata();

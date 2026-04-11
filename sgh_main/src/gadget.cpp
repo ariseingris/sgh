@@ -9,6 +9,15 @@
 // ============================================================
 
 #include "gadget.h"
+#include "rtt_debug.h"
+
+extern RTTSerial rttDebug;  // defined in main.cpp
+
+// FIX 1: activate/deactivate_system() now own the systemActive flag.
+// Previously the flag was set at every call site (parseBCommand, loop keyboard,
+// and physical buttons) — physical buttons were the only sites that forgot it,
+// so pressing a button never updated the alert/sensor logic that reads the flag.
+extern bool systemActive;
 
 static unsigned long pistonStartMs   = 0;
 static bool          pistonRunning   = false;
@@ -42,7 +51,7 @@ void extend_Piston() {
     digitalWrite(PISTON_IN2, LOW);
     pistonRunning = true;
     pistonStartMs = millis();
-    Serial.println(">>> PISTON: EXTEND");
+    rttDebug.println(">>> PISTON: EXTEND");
 }
 
 void retract_Piston() {
@@ -50,14 +59,14 @@ void retract_Piston() {
     digitalWrite(PISTON_IN2, HIGH);
     pistonRunning = true;
     pistonStartMs = millis();
-    Serial.println(">>> PISTON: RETRACT");
+    rttDebug.println(">>> PISTON: RETRACT");
 }
 
 void stop_Piston() {
     digitalWrite(PISTON_IN1, LOW);
     digitalWrite(PISTON_IN2, LOW);
     pistonRunning = false;
-    Serial.println(">>> PISTON: STOP");
+    rttDebug.println(">>> PISTON: STOP");
 }
 
 // ============================================================
@@ -65,25 +74,27 @@ void stop_Piston() {
 // ============================================================
 void turn_Fan_ON() {
     digitalWrite(FAN_RELAY, HIGH);
-    Serial.println(">>> FAN: ON");
+    rttDebug.println(">>> FAN: ON");
 }
 
 void turn_Fan_OFF() {
     digitalWrite(FAN_RELAY, LOW);
-    Serial.println(">>> FAN: OFF");
+    rttDebug.println(">>> FAN: OFF");
 }
 
 // ============================================================
 //  System-level shortcuts
 // ============================================================
 void activate_system() {
-    Serial.println("--- SYSTEM: ACTIVATE (close) ---");
+    rttDebug.println("--- SYSTEM: ACTIVATE (close) ---");
+    systemActive = true;          // FIX 1: single source of truth for the flag
     turn_Fan_ON();
     retract_Piston();
 }
 
 void deactivate_system() {
-    Serial.println("--- SYSTEM: DEACTIVATE (open) ---");
+    rttDebug.println("--- SYSTEM: DEACTIVATE (open) ---");
+    systemActive = false;         // FIX 1: single source of truth for the flag
     turn_Fan_OFF();
     extend_Piston();
 }
@@ -104,20 +115,37 @@ void update_actuators() {
 //  delay() would block loop() for 300 ms on every press,
 //  preventing UART reads, sensor polling, and piston auto-stop.
 // ============================================================
+// ============================================================
+//  check_PhysicalButtons()  — call every loop()
+//
+//  FIX 2: Edge-triggered detection (LOW-going edge only).
+//  Previous code re-fired every DEBOUNCE_MS while the button
+//  was held. Now we track the previous state; the action fires
+//  only on the transition HIGH→LOW (button just pressed).
+//  The DEBOUNCE_MS guard still filters contact bounce.
+// ============================================================
 void check_PhysicalButtons() {
+    static bool prevOpen  = HIGH;
+    static bool prevClose = HIGH;
     unsigned long now = millis();
 
-    if (digitalRead(BUTTON_OPEN_PIN) == LOW) {
+    bool openNow  = digitalRead(BUTTON_OPEN_PIN);
+    bool closeNow = digitalRead(BUTTON_CLOSE_PIN);
+
+    // Falling edge (HIGH → LOW) = fresh press
+    if (openNow == LOW && prevOpen == HIGH) {
         if (now - lastOpenBtnMs >= DEBOUNCE_MS) {
             lastOpenBtnMs = now;
             deactivate_system();
         }
     }
+    prevOpen = openNow;
 
-    if (digitalRead(BUTTON_CLOSE_PIN) == LOW) {
+    if (closeNow == LOW && prevClose == HIGH) {
         if (now - lastCloseBtnMs >= DEBOUNCE_MS) {
             lastCloseBtnMs = now;
             activate_system();
         }
     }
+    prevClose = closeNow;
 }

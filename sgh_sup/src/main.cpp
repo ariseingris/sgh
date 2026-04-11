@@ -1,110 +1,108 @@
 // ============================================================
-//  main.cpp  —  STM32-B  Blue Pill  (Gateway node)
-//  DEBUG OUTPUT VIA SEGGER RTT (J-Link / ST-Link + OpenOCD)
+//  main.cpp  —  STM32-B  Minimal HiveMQ Test
+//
+//  Goal: Boot SIM A7680C → GPRS → MQTT → publish "HI"
+//
+//  Wiring:
+//    USART1  PA10 RX / PA9 TX  →  SIM A7680C
 // ============================================================
 
 #include <Arduino.h>
-#include "module_sim.h"
 
-// BUG FIX #2 & #5:  #define Serial rttDebug  MUST come AFTER
-// all library #includes, and MUST NOT be in module_sim.h.
-// If placed in the header, TinyGSM's internal Serial references
-// get macro-replaced, breaking AT command parsing entirely.
-// Placing it here means only main.cpp code gets the redirect.
+#define TINY_GSM_MODEM_SIM7600
+#define TINY_GSM_RX_BUFFER 1024
+#include <TinyGsmClient.h>
+#include <PubSubClient.h>
+
+// RTT debug output (Serial → ST-Link SWD, no UART needed)
+#include "rtt_debug.h"
+RTTSerial rttDebug;
 #define Serial rttDebug
 
-// RTTSerial instance (declared extern in module_sim.h)
-RTTSerial rttDebug;
+// -------------------------------------------------------
+//  SIM A7680C on USART1  (PA10 RX, PA9 TX)
+// -------------------------------------------------------
+static HardwareSerial SerialSIM(PA10, PA9);
+TinyGsm        modem(SerialSIM);
+TinyGsmClient  gsmClient(modem, 0);
+PubSubClient   mqtt(gsmClient);
 
 // -------------------------------------------------------
-//  Timers
+//  Settings
 // -------------------------------------------------------
-const unsigned long HEARTBEAT_INTERVAL  = 30000UL;
-unsigned long       lastHeartbeatMs     = 0;
-
-
-
-// ============================================================
-//  parseLineFromA()
-// ============================================================
-static void parseLineFromA(const String& line) {
-    Serial.print("[RX←A] ");
-    Serial.println(line);
-
-    if (line.startsWith("DATA:")) {
-        onDataFromA(line.substring(5));
-
-    } else if (line.startsWith("ALERT:")) {
-        int commaIdx = line.indexOf(',', 6);
-        if (commaIdx > 6) {
-            String phone = line.substring(6, commaIdx);
-            String msg   = line.substring(commaIdx + 1);
-            onAlertFromA(phone, msg);
-        }
-
-    } else if (line.startsWith("ACK:")) {
-        if (mqttClient.connected()) {
-            char buf[80];
-            snprintf(buf, sizeof(buf), "{\"ack\":\"%s\"}", line.c_str());
-            mqttClient.publish("greenhouse/stm32/ack", buf);
-        }
-
-    } else {
-        Serial.println("[RX←A] Unrecognised line.");
-    }
-}
+#define SIM_APN      "m3-world"
+#define MQTT_HOST    "broker.hivemq.com"
+#define MQTT_PORT    1883
+#define MQTT_ID      "clientId-ssxG23t4Up"
+#define MQTT_TOPIC   "greenhouse/stm32/sensors"
 
 // ============================================================
 //  setup()
 // ============================================================
 void setup() {
-    Serial.begin(115200);   // calls SEGGER_RTT_Init()
-    delay(1000);
+    Serial.begin(115200);
+    delay(2000);
+    Serial.println("=== STM32-B HiveMQ Test ===");
 
-    pinMode(PC13, OUTPUT);
-    digitalWrite(PC13, HIGH);   // LED off initially (PC13 active-low)
+    // ── Init modem ──────────────────────────────────────────
+    SerialSIM.begin(115200);
+    Serial.println("[SIM] Cold-boot wait 8s...");
+    delay(8000);
 
-    Serial.println("\n\n====== STM32-B GATEWAY INIT (RTT MODE) ======");
-    Serial.println("Dang khoi dong module SIM...");
-    Serial.println(" -> Kiem tra NGUON 2A hoac day RX/TX cua SIM");
+    Serial.println("[SIM] Probing modem...");
+    if (!modem.testAT(3000)) {
+        Serial.println("[SIM] No response — restarting...");
+        modem.restart();
+        delay(10000);
+        if (!modem.testAT(5000)) {
+            Serial.println("[SIM] ERROR: Modem not responding. Check PA9/PA10 wiring.");
+            return;
+        }
+    }
+    Serial.println("[SIM] Modem OK");
 
-    setupSIM_A7680();
+    // ── Wait for GSM network ────────────────────────────────
+    Serial.println("[SIM] Waiting for GSM network (max 60s)...");
+    if (!modem.waitForNetwork(60000)) {
+        Serial.println("[SIM] ERROR: No GSM network.");
+        return;
+    }
+    Serial.print("[SIM] GSM OK. Signal: ");
+    Serial.println(modem.getSignalQuality());
 
-    Serial.println("====== GATEWAY READY ======");
+    // ── Connect GPRS ────────────────────────────────────────
+    Serial.println("[SIM] Connecting GPRS (APN=m3-world)...");
+    if (!modem.gprsConnect(SIM_APN, "", "")) {
+        Serial.println("[SIM] ERROR: GPRS failed.");
+        return;
+    }
+    Serial.print("[SIM] GPRS OK. IP: ");
+    Serial.println(modem.getLocalIP());
+
+    // ── Connect MQTT ────────────────────────────────────────
+    mqtt.setServer(MQTT_HOST, MQTT_PORT);
+    Serial.print("[MQTT] Connecting to ");
+    Serial.print(MQTT_HOST);
+    Serial.println("...");
+
+    if (!mqtt.connect(MQTT_ID)) {
+        Serial.print("[MQTT] ERROR: Connect failed, state=");
+        Serial.println(mqtt.state());
+        return;
+    }
+    Serial.println("[MQTT] Connected!");
+
+    // ── Publish "HI" ────────────────────────────────────────
+    if (mqtt.publish(MQTT_TOPIC, "HI")) {
+        Serial.println("[MQTT] Sent: HI  ->  " MQTT_TOPIC);
+    } else {
+        Serial.println("[MQTT] ERROR: Publish failed.");
+    }
 }
 
 // ============================================================
 //  loop()
 // ============================================================
 void loop() {
-    // 1. Read data from STM32-A (USART1: PA9 RX / PA10 TX)
-    while (SerialA.available()) {
-        String line = SerialA.readStringUntil('\n');
-        line.trim();
-        if (line.length() > 0) parseLineFromA(line);
-    }
-
-    // 2. Maintain GPRS and MQTT
-    loopGateway();
-
-    unsigned long now = millis();
-
-    // 3. Blink LED every 500ms to confirm loop() is running
-    static unsigned long lastBlink = 0;
-    if (now - lastBlink > 500) {
-        lastBlink = now;
-        digitalWrite(PC13, !digitalRead(PC13));
-    }
-
-    // 4. Send Heartbeat to HiveMQ
-    if (now - lastHeartbeatMs >= HEARTBEAT_INTERVAL) {
-        lastHeartbeatMs = now;
-        if (mqttClient.connected()) {
-            char buf[48];
-            snprintf(buf, sizeof(buf), "{\"uptime\":%lu}", now / 1000UL);
-            mqttClient.publish("greenhouse/stm32/heartbeat", buf);
-            Serial.println("[MQTT] Sent Heartbeat");
-        }
-    }
-
+    mqtt.loop();   // keepalive
 }

@@ -11,7 +11,7 @@ echo "════════════════════════�
 echo "  STM32-B Gateway | RTT Debugger Setup"
 echo "═════════════════════════════════════════════════════════"
 
-# 1. Find OpenOCD binary from platformio
+# 1. Find OpenOCD binary and scripts from platformio
 echo "► Step 1: Locating OpenOCD..."
 OPENOCD_BIN=$(find "$HOME/.platformio/packages/tool-openocd" -name "openocd" -type f 2>/dev/null | head -n 1)
 
@@ -21,7 +21,17 @@ if [ -z "$OPENOCD_BIN" ]; then
     exit 1
 fi
 
+# Derive the scripts directory from the binary location
+OPENOCD_DIR=$(dirname "$(dirname "$OPENOCD_BIN")")
+OPENOCD_SCRIPTS="$OPENOCD_DIR/openocd/scripts"
+
+if [ ! -d "$OPENOCD_SCRIPTS" ]; then
+    echo "❌ ERROR: OpenOCD scripts not found at $OPENOCD_SCRIPTS"
+    exit 1
+fi
+
 echo "   ✓ Found: $OPENOCD_BIN"
+echo "   ✓ Scripts: $OPENOCD_SCRIPTS"
 
 # 2. Clean up any lingering OpenOCD processes to avoid port conflicts
 echo "► Step 2: Cleaning up..." 
@@ -29,11 +39,14 @@ killall -9 openocd > /dev/null 2>&1 || true
 sleep 1
 
 # 3. OpenOCD configuration for STM32F1x with ST-Link
-CONFIG="-f interface/stlink.cfg -f target/stm32f1x.cfg"
-
 # 4. Start OpenOCD server in background with logging
 echo "► Step 3: Starting OpenOCD server..."
-$OPENOCD_BIN $CONFIG -c "telnet_port 4444" > /tmp/openocd_rtt.log 2>&1 &
+$OPENOCD_BIN \
+    -s "$OPENOCD_SCRIPTS" \
+    -f interface/stlink.cfg \
+    -f target/stm32f1x.cfg \
+    -c "telnet_port 4444" \
+    > /tmp/openocd_rtt.log 2>&1 &
 OPENOCD_PID=$!
 sleep 3
 
@@ -62,8 +75,7 @@ for attempt in 1 2 3; do
     echo "   Attempt $attempt/3..."
     if (echo "rtt setup 0x20000000 0x5000 \"SEGGER RTT\""; sleep 0.3; \
         echo "rtt start"; sleep 0.3; \
-        echo "rtt server start 19021 0"; sleep 0.3; \
-        echo "exit") | nc -q 1 -w 2 localhost 4444 2>/dev/null > /tmp/rtt_setup.log; then
+        echo "rtt server start 19021 0"; sleep 1) | nc -w 3 localhost 4444 2>/dev/null > /tmp/rtt_setup.log; then
         RTT_SETUP_OK=true
         break
     fi
@@ -95,8 +107,7 @@ echo ""
 
 # Connect via netcat (more reliable than telnet)
 if command -v nc &> /dev/null; then
-    nc -l -p 19021 < /dev/null &
-    sleep 0.5
+    # Simply connect to the port where OpenOCD RTT server is listening
     nc localhost 19021 || true
 else
     telnet localhost 19021 || true
