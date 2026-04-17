@@ -12,6 +12,7 @@
 #define PISTON_IN2       PA4
 #define BUTTON_OPEN_PIN  PA7
 #define BUTTON_CLOSE_PIN PB0
+#define BUTTON_TOGGLE_PIN PB12   // System toggle (on/off)
 
 // -------------------------------------------------------
 //  API
@@ -30,5 +31,8 @@ void deactivate_system();
 
 void update_actuators();
 void check_PhysicalButtons();
+
+bool getFanState();     // true = fan ON (FAN_RELAY HIGH)
+bool getPistonState();  // true = piston retracted/closed (PISTON_IN2 HIGH)
 
 #endif // GADGET_H

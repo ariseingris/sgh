@@ -9,7 +9,9 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <IWatchdog.h>
 #include "rtt_debug.h"
+// config.h removed — all settings inlined below
 #include "i2c_recover.h"
 #include "sensor_light.h"
 #include "sensor_temp_hum.h"
@@ -37,8 +39,9 @@ HardwareSerial SerialB(PA10, PA9);              // RX=PA10, TX=PA9  (USART1 to S
 
 // -------------------------------------------------------
 //  Alert config
+//  FLAW-2 FIX: phone number moved to STM32-B config.h.
+//  STM32-A only sends the message body.
 // -------------------------------------------------------
-const String alertPhone            = "+84812065252";
 const unsigned long ALERT_INTERVAL = 3600000UL;
 unsigned long       lastAlertMs    = 0;
 
@@ -82,24 +85,23 @@ static unsigned long lastI2CRecoverMs = 0;
 static const unsigned long I2C_RECOVER_COOLDOWN = 30000UL; // max once per 30s
 
 // Called after each sensor read cycle to check I2C health.
-// FIX 3: Replaced allZero check (false-positives at night when lux=0,
-// or at 0°C) with a pressure-anchored check. Atmospheric pressure is
-// never 0 hPa — if the BME280 returns 0 it has locked up. We require
-// BOTH the pressure and the temp/humidity pair to fail simultaneously
-// before declaring a bus lockup, which eliminates single-sensor glitches.
+// FIX 3: Pressure-anchored dual-sensor check. Requires BOTH pressure
+// AND temp/humidity to return the -999.0f fault sentinel before declaring
+// a bus lockup — eliminates single-sensor glitches.
+// PHASE 2 FIX: Checks < 0 / < -100 instead of == 0 so that:
+//   - pressure: -999.0 < 0 ✓ (real pressure is always ≥ 100 hPa)
+//   - temperature: -999.0 < -100 ✓ (real temp ≥ -40°C > -100°C)
+//   - humidity: -999.0 < 0 ✓ (real humidity ≥ 0%)
 static void checkI2CHealth() {
-    // Pressure is the most reliable lockup indicator: never 0 in atmosphere.
-    // Require pressure AND (temp+hum) both zero to avoid false positives from
-    // a single momentary read error on one sensor.
-    bool pressureFailed = (g_pressure == 0.0f);
-    bool tempHumFailed  = (g_temperature == 0.0f && g_humidity == 0.0f);
+    bool pressureFailed = (g_pressure < 0.0f);
+    bool tempHumFailed  = (g_temperature < -100.0f && g_humidity < 0.0f);
 
     if (pressureFailed && tempHumFailed) {
         i2cFailCount++;
         rttDebug.print("[I2C] Watchdog: multi-sensor zero count=");
         rttDebug.println(i2cFailCount);
     } else {
-        i2cFailCount = 0;  // reset on any good reading
+        i2cFailCount = 0;
     }
 
     unsigned long now = millis();
@@ -110,16 +112,20 @@ static void checkI2CHealth() {
         i2cFailCount     = 0;
         rttDebug.println("[I2C] BUS LOCKUP DETECTED — attempting recovery...");
 
+        // FW-4 FIX: Pet watchdog before potentially long recovery+scan
+        // (recovery + scanI2C + re-init can take 2–3s, watchdog is 4s)
+        IWatchdog.reload();
+
         bool ok = recoverI2C();
         rttDebug.print("[I2C] Bus recovery: ");
         rttDebug.println(ok ? "SDA released" : "SDA still stuck!");
 
+        IWatchdog.reload();  // pet again before scan
         int found = scanI2C();
         rttDebug.print("[I2C] Devices after recovery: ");
         rttDebug.println(found);
 
         if (found > 0) {
-            // Re-init all I2C sensors
             rttDebug.println("[I2C] Re-initialising sensors...");
             setupBH1750_Sensor();
             setupSHT30_Sensor();
@@ -129,20 +135,34 @@ static void checkI2CHealth() {
         } else {
             rttDebug.println("[I2C] !! No devices found after recovery. Check wiring !!");
         }
+        IWatchdog.reload();  // pet after re-init
     }
 }
 
 // ============================================================
 //  sendDataToB()
-//  Format: DATA:<temp>,<hum>,<co2>,<lux>,<pressure>,<gas>,<soil>
-//  This is the exact format STM32-B's onDataFromA() expects.
+//  FLAW-3 FIX: Sends JSON directly instead of CSV.
+//  STM32-B publishes this payload verbatim — no parsing needed.
+//  Format: DATA:{"ts":...,"temp":...,"hum":...,"co2":...,...}
 // ============================================================
 void sendDataToB() {
-    char buf[128];
+    // FW-1 FIX: Use dtostrf() on stack instead of heap-allocating String(float,1).
+    // Eliminates 4 malloc/free calls per 10-second cycle — prevents heap fragmentation.
+    unsigned long ts = millis() / 1000UL;
+    char sTemp[8], sHum[8], sLux[10], sPress[10];
+    dtostrf(g_temperature, 1, 1, sTemp);
+    dtostrf(g_humidity,    1, 1, sHum);
+    dtostrf(g_lux,         1, 1, sLux);
+    dtostrf(g_pressure,    1, 1, sPress);
+
+    char buf[280];
     snprintf(buf, sizeof(buf),
-        "DATA:%.1f,%.1f,%u,%.1f,%.1f,%d,%d",
-        g_temperature, g_humidity, g_co2,
-        g_lux, g_pressure, g_gasValue, g_soilMoist);
+        "DATA:{\"ts\":%lu,\"temp\":%s,\"hum\":%s,\"co2\":%u,"
+        "\"lux\":%s,\"pressure\":%s,\"gas\":%d,\"soil\":%d,"
+        "\"fan\":%d,\"piston\":%d}",
+        ts, sTemp, sHum, (unsigned int)g_co2,
+        sLux, sPress, g_gasValue, g_soilMoist,
+        (int)getFanState(), (int)getPistonState());
     SerialB.println(buf);
     Serial.print("[TX→B] ");
     Serial.println(buf);
@@ -150,14 +170,12 @@ void sendDataToB() {
 
 // ============================================================
 //  sendFakeDataToB()
-//  Sends hardcoded test values so you can verify the full
-//  pipeline (A→B UART → B parses → B publishes to HiveMQ)
-//  without needing real sensors connected.
-//  Format is identical to sendDataToB().
+//  FLAW-3 FIX: Sends JSON format matching sendDataToB().
 // ============================================================
 void sendFakeDataToB() {
-    // Realistic greenhouse values for testing
-    const char* fakePayload = "DATA:26.5,75.2,450,1500.0,1012.5,280,60";
+    const char* fakePayload =
+        "DATA:{\"ts\":0,\"temp\":26.5,\"hum\":75.2,\"co2\":450,"
+        "\"lux\":1500.0,\"pressure\":1012.5,\"gas\":280,\"soil\":60}";
     SerialB.println(fakePayload);
     Serial.print("[TX→B] FAKE: ");
     Serial.println(fakePayload);
@@ -165,22 +183,29 @@ void sendFakeDataToB() {
 
 // ============================================================
 //  requestAlertFromB()
+//  FLAW-2 FIX: sends ALERT:<msg> without phone number.
+//  Phone is now owned by STM32-B (config.h).
 // ============================================================
 void requestAlertFromB() {
-    String msg = "Greenhouse Alert: ";
-    msg += "Temp=" + String(g_temperature, 1) + "C; ";
-    msg += "Hum="  + String(g_humidity,    1) + "%; ";
-    msg += "Gas="  + String(g_gasValue)        + "; ";
-    msg += "Soil=" + String(g_soilMoist)        + "; ";
-    msg += "Lux="  + String(g_lux,         1) + "Lux; ";
-    msg += "Press="+ String(g_pressure,    1) + "hPa; ";
-    msg += g_co2Ready
-           ? "CO2=" + String(g_co2) + "ppm"
-           : "CO2=NotReady";
+    // FW-2 FIX: Use dtostrf() instead of %.1f to avoid linking _printf_float
+    // (which adds ~10KB to flash on newlib-nano, or silently outputs nothing).
+    char sTemp[8], sHum[8], sLux[10], sPress[10];
+    dtostrf(g_temperature, 1, 1, sTemp);
+    dtostrf(g_humidity,    1, 1, sHum);
+    dtostrf(g_lux,         1, 1, sLux);
+    dtostrf(g_pressure,    1, 1, sPress);
+
+    char msg[200];
+    int n = snprintf(msg, sizeof(msg),
+        "Greenhouse Alert: Temp=%sC; Hum=%s%%; Gas=%d; Soil=%d; Lux=%sLux; Press=%shPa; ",
+        sTemp, sHum, g_gasValue, g_soilMoist, sLux, sPress);
+    if (g_co2Ready) {
+        snprintf(msg + n, sizeof(msg) - n, "CO2=%uppm", g_co2);
+    } else {
+        snprintf(msg + n, sizeof(msg) - n, "CO2=NotReady");
+    }
 
     SerialB.print("ALERT:");
-    SerialB.print(alertPhone);
-    SerialB.print(",");
     SerialB.println(msg);
     Serial.println("[TX→B] ALERT request sent.");
 }
@@ -188,39 +213,38 @@ void requestAlertFromB() {
 // ============================================================
 //  parseBCommand()
 // ============================================================
-void parseBCommand(const String& line) {
+// FW-8 FIX: accepts const char* to avoid heap-allocating String copy.
+void parseBCommand(const char* line) {
     Serial.print("[RX←B] ");
     Serial.println(line);
 
-    if (line == "SYSTEM_ON") {
-        // FIX: removed `systemActive = true` — activate_system() now sets it
+    if (strcmp(line, "SYSTEM_ON") == 0) {
         activate_system();
         SerialB.println("ACK:SYSTEM_ON");
 
-    } else if (line == "SYSTEM_OFF") {
-        // FIX: removed `systemActive = false` — deactivate_system() now sets it
+    } else if (strcmp(line, "SYSTEM_OFF") == 0) {
         deactivate_system();
         SerialB.println("ACK:SYSTEM_OFF");
 
-    } else if (line == "FAN_ON") {
+    } else if (strcmp(line, "FAN_ON") == 0) {
         turn_Fan_ON();
         SerialB.println("ACK:FAN_ON");
 
-    } else if (line == "FAN_OFF") {
+    } else if (strcmp(line, "FAN_OFF") == 0) {
         turn_Fan_OFF();
         SerialB.println("ACK:FAN_OFF");
 
-    } else if (line == "PISTON_OPEN") {
+    } else if (strcmp(line, "PISTON_OPEN") == 0) {
         extend_Piston();
         SerialB.println("ACK:PISTON_OPEN");
 
-    } else if (line == "PISTON_CLOSE") {
+    } else if (strcmp(line, "PISTON_CLOSE") == 0) {
         retract_Piston();
         SerialB.println("ACK:PISTON_CLOSE");
 
-    } else if (line.startsWith("INFO:") ||
-               line.startsWith("ERR:")  ||
-               line.startsWith("URC:")) {
+    } else if (strncmp(line, "INFO:", 5) == 0 ||
+               strncmp(line, "ERR:",  4) == 0 ||
+               strncmp(line, "URC:",  4) == 0) {
         // Status messages from B — already printed above
 
     } else {
@@ -256,6 +280,7 @@ void setup() {
     delay(2000);
 
     Wire.begin();
+    Wire.setClock(400000); // 400 kHz fast mode — required for reliable multi-sensor I2C
     Serial.println("====== STM32-A NODE INIT ======");
 
     // -------------------------------------------------------
@@ -288,6 +313,7 @@ void setup() {
     setupSCD40_Sensor();
     setupBME280_Sensor();
     setup_Actuators();
+    initMQ4_Warmup(); // Start MQ-4 warm-up timer
 
     SerialB.begin(BAUD_B);
     delay(500);
@@ -303,12 +329,17 @@ void setup() {
     rttDebug.println("  4 = Send alert via B");
     rttDebug.println("  5 = Send real sensor DATA: to B now");
     rttDebug.println("  6 = Send FAKE DATA: to B now");  // <-- new
+
+    // Watchdog: 4-second timeout. Must call IWatchdog.reload() in loop().
+    IWatchdog.begin(4000000); // 4 seconds in microseconds
 }
 
 // ============================================================
 //  loop()
 // ============================================================
 void loop() {
+    IWatchdog.reload(); // Pet the watchdog every loop iteration
+
     unsigned long now = millis();
 
     // 1. Read sensors every SENSOR_INTERVAL
@@ -326,11 +357,33 @@ void loop() {
         checkI2CHealth();
     }
 
-    // 2. Read commands from STM32-B
-    while (SerialB.available()) {
-        String line = SerialB.readStringUntil('\n');
-        line.trim();
-        if (line.length() > 0) parseBCommand(line);
+    // 2. Read commands from STM32-B (non-blocking)
+    //    FW-6 FIX: Added discard flag — on buffer overflow, skip all
+    //    remaining bytes until next newline instead of parsing the tail.
+    //    FW-8 FIX: Pass char* directly to parseBCommand — no String copy.
+    {
+        static char cmdBuf[80];
+        static uint8_t cmdPos = 0;
+        static bool discarding = false;
+        while (SerialB.available()) {
+            char c = (char)SerialB.read();
+            if (c == '\n' || c == '\r') {
+                if (!discarding && cmdPos > 0) {
+                    cmdBuf[cmdPos] = '\0';
+                    parseBCommand(cmdBuf);
+                }
+                cmdPos = 0;
+                discarding = false;
+                continue;
+            }
+            if (discarding) continue;
+            if (cmdPos < sizeof(cmdBuf) - 1) {
+                cmdBuf[cmdPos++] = c;
+            } else {
+                discarding = true;  // FW-6: skip rest of this line
+                cmdPos = 0;
+            }
+        }
     }
 
     // 3. Send real sensor data to B every DATA_INTERVAL
@@ -356,6 +409,7 @@ void loop() {
 
     // 5. Piston auto-stop
     update_actuators();
+    check_PhysicalButtons();
 
     // 6. Periodic USB printout
     if (now - prevPrint >= PRINT_INTERVAL) {

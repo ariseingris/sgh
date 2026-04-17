@@ -1,0 +1,103 @@
+Processing bluepill_f103c8 (platform: ststm32; board: bluepill_f103c8; framework: arduino)
+--------------------------------------------------------------------------------
+Verbose mode can be enabled via `-v, --verbose` option
+CONFIGURATION: https://docs.platformio.org/page/boards/ststm32/bluepill_f103c8.html
+PLATFORM: ST STM32 (19.4.0) > BluePill F103C8
+HARDWARE: STM32F103C8T6 72MHz, 20KB RAM, 64KB Flash
+DEBUG: Current (stlink) External (blackmagic, cmsis-dap, jlink, stlink)
+PACKAGES: 
+ - framework-arduinoststm32 @ 4.21100.0 (2.11.0) 
+ - framework-cmsis @ 2.50900.0 (5.9.0) 
+ - tool-dfuutil @ 1.11.0 
+ - tool-dfuutil-arduino @ 1.11.0 
+ - tool-openocd @ 3.1200.0 (12.0) 
+ - tool-stm32duino @ 1.0.1 
+ - tool-stm32flash @ 0.7.0 
+ - toolchain-gccarmnoneeabi @ 1.120301.0 (12.3.1)
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 17 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- TinyGSM @ 0.11.7
+|-- PubSubClient @ 2.8.0
+|-- ArduinoHttpClient @ 0.6.1
+Building in release mode
+Checking size .pio/build/bluepill_f103c8/firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [==        ]  22.4% (used 4596 bytes from 20480 bytes)
+Flash: [========  ]  82.0% (used 53728 bytes from 65536 bytes)
+Configuring upload protocol...
+AVAILABLE: blackmagic, cmsis-dap, dfu, jlink, mbed, stlink
+CURRENT: upload_protocol = stlink
+Uploading .pio/build/bluepill_f103c8/firmware.elf
+xPack Open On-Chip Debugger 0.12.0-01004-g9ea7f3d64-dirty (2023-01-30-15:03)
+Licensed under GNU GPL v2
+For bug reports, read
+	http://openocd.org/doc/doxygen/bugs.html
+debug_level: 1
+
+hla_swd
+none separate
+
+in procedure 'program'
+** OpenOCD init failed **
+shutdown command invoked
+
+*** [upload] Error 1
+========================== [FAILED] Took 1.11 seconds ==========================
+
+Processing bluepill_f103c8_mock (platform: ststm32; board: bluepill_f103c8; framework: arduino)
+--------------------------------------------------------------------------------
+Verbose mode can be enabled via `-v, --verbose` option
+CONFIGURATION: https://docs.platformio.org/page/boards/ststm32/bluepill_f103c8.html
+PLATFORM: ST STM32 (19.4.0) > BluePill F103C8
+HARDWARE: STM32F103C8T6 72MHz, 20KB RAM, 64KB Flash
+DEBUG: Current (stlink) External (blackmagic, cmsis-dap, jlink, stlink)
+PACKAGES: 
+ - framework-arduinoststm32 @ 4.21100.0 (2.11.0) 
+ - framework-cmsis @ 2.50900.0 (5.9.0) 
+ - tool-dfuutil @ 1.11.0 
+ - tool-dfuutil-arduino @ 1.11.0 
+ - tool-openocd @ 3.1200.0 (12.0) 
+ - tool-stm32duino @ 1.0.1 
+ - tool-stm32flash @ 0.7.0 
+ - toolchain-gccarmnoneeabi @ 1.120301.0 (12.3.1)
+LDF: Library Dependency Finder -> https://bit.ly/configure-pio-ldf
+LDF Modes: Finder ~ chain, Compatibility ~ soft
+Found 17 compatible libraries
+Scanning dependencies...
+Dependency Graph
+|-- TinyGSM @ 0.11.7
+|-- PubSubClient @ 2.8.0
+|-- ArduinoHttpClient @ 0.6.1
+Building in release mode
+Checking size .pio/build/bluepill_f103c8_mock/firmware.elf
+Advanced Memory Usage is available via "PlatformIO Home > Project Inspect"
+RAM:   [==        ]  22.4% (used 4588 bytes from 20480 bytes)
+Flash: [=======   ]  72.8% (used 47680 bytes from 65536 bytes)
+Configuring upload protocol...
+AVAILABLE: blackmagic, cmsis-dap, dfu, jlink, mbed, stlink
+CURRENT: upload_protocol = stlink
+Uploading .pio/build/bluepill_f103c8_mock/firmware.elf
+xPack Open On-Chip Debugger 0.12.0-01004-g9ea7f3d64-dirty (2023-01-30-15:03)
+Licensed under GNU GPL v2
+For bug reports, read
+	http://openocd.org/doc/doxygen/bugs.html
+debug_level: 1
+
+hla_swd
+none separate
+
+in procedure 'program'
+** OpenOCD init failed **
+shutdown command invoked
+
+*** [upload] Error 1
+========================== [FAILED] Took 0.88 seconds ==========================
+
+Environment           Status    Duration
+--------------------  --------  ------------
+bluepill_f103c8       FAILED    00:00:01.115
+bluepill_f103c8_mock  FAILED    00:00:00.883
+==================== 2 failed, 0 succeeded in 00:00:01.997 ====================

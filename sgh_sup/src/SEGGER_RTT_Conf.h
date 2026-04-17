@@ -92,7 +92,7 @@ Revision: $Rev: 24316 $
 #endif
 
 #ifndef   BUFFER_SIZE_UP
-  #define BUFFER_SIZE_UP                            (1024)  // Size of the buffer for terminal output of target, up to host (Default: 1k)
+  #define BUFFER_SIZE_UP                            (4096)  // Increased from 1024 to handle fast bursts (e.g. setupSIM_A7680 IMEI/GPRS output)
 #endif
 
 #ifndef   BUFFER_SIZE_DOWN
@@ -104,7 +104,7 @@ Revision: $Rev: 24316 $
 #endif
 
 #ifndef   SEGGER_RTT_MODE_DEFAULT
-  #define SEGGER_RTT_MODE_DEFAULT                   SEGGER_RTT_MODE_NO_BLOCK_SKIP // Mode for pre-initialized terminal channel (buffer 0)
+  #define SEGGER_RTT_MODE_DEFAULT                   SEGGER_RTT_MODE_BLOCK_IF_FIFO_FULL // Changed from NO_BLOCK_SKIP: prevents silent data loss on buffer overflow
 #endif
 
 /*********************************************************************

@@ -1,0 +1,21 @@
+# Ignore dependency directories (Thư mục thư viện)
+node_modules/
+venv/
+.env
+__pycache__/
+
+# Ignore build outputs (Dữ liệu đầu ra/biên dịch)
+dist/
+build/
+*.exe
+*.bin
+
+# Ignore logs and temporary files (File nhật ký và tạm thời)
+*.log
+tmp/
+.vscode/
+.idea/
+
+# Ignore large data or media (Dữ liệu lớn và hình ảnh)
+data/*.csv
+images/greenhouse_shots/

@@ -43,19 +43,21 @@ void setupBH1750_Sensor() {
 }
 
 float readBH1750_Lux() {
+    // PHASE 2 FIX: -999.0f sentinel — lux is legitimately 0 at night.
+    // 0.0 on failure is indistinguishable from a dark-room reading.
     if (!bh1750Ready) {
-        return 0.0f;
+        return -999.0f;
     }
 
     float lux = lightMeter.readLightLevel();
-    
+
     // readLightLevel() returns -1.0 on sensor error or when the
     // sensor is in ONE_TIME mode and has already taken its reading.
     if (lux < 0.0f || lux > 65000.0f) {
         extern RTTSerial rttDebug;
         rttDebug.print("[BH1750] Out of range: ");
         rttDebug.println(lux);
-        return 0.0f;
+        return -999.0f;
     }
 
     return lux;

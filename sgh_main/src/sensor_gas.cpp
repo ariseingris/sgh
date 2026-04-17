@@ -14,12 +14,37 @@
 #include "sensor_gas.h"
 #include "rtt_debug.h"
 
+static bool mq4WarmupDone = false;
+static unsigned long mq4StartMs = 0;
+
+// MQ-4 requires ~24 hours warm-up for accurate calibration.
+// After power-on we mark a start time; readings before warm-up
+// complete are flagged by returning -1 (invalid sentinel).
+void initMQ4_Warmup() {
+    mq4StartMs = millis();
+    mq4WarmupDone = false;
+}
+
+bool isMQ4_Warm() {
+    if (mq4WarmupDone) return true;
+    // 300 seconds (5 min) minimum for the sensor to stabilise enough
+    // to give directionally useful readings, even if not fully calibrated.
+    // Full 24h accuracy requires mq4StartMs + 86400000UL.
+    if (millis() - mq4StartMs >= 300000UL) {
+        mq4WarmupDone = true;
+    }
+    return mq4WarmupDone;
+}
+
 // ============================================================
 //  readMQ4_Gas()
 //  Reads analog gas sensor (MQ-4) on pin PB1
-//  Returns: 0–4095 ADC value (0V = 0; 3.3V = 4095)
+//  Returns: -1 during warm-up; 0–4095 ADC value after warm-up
 // ============================================================
 int readMQ4_Gas() {
+    if (!isMQ4_Warm()) {
+        return -1; // Sentinel: sensor warming up, value not valid
+    }
     int val = analogRead(PB1);
 
     // Validate ADC range (safety check for hardware issues)

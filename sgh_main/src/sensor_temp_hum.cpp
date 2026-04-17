@@ -33,8 +33,11 @@ void setupSHT30_Sensor() {
 }
 
 void readSHT30_Data(float &temperature, float &humidity) {
-    temperature = 0.0f;  // Default safe value
-    humidity = 0.0f;
+    // PHASE 2 FIX: -999.0f sentinel instead of 0.0f.
+    // 0.0°C / 0.0% looks like a real reading (or a greenhouse freeze alarm).
+    // -999.0f is clearly outside all physical ranges — cloud can display "N/A".
+    temperature = -999.0f;
+    humidity    = -999.0f;
 
     if (!sht30Ready) {
         return;

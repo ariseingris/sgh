@@ -34,8 +34,10 @@ void setupBME280_Sensor() {
 }
 
 float readBME280_Pressure() {
+    // PHASE 2 FIX: -999.0f sentinel — pressure is always positive (hPa).
+    // 0.0 hPa is physically impossible and was mistaken for a valid reading.
     if (!bme280Ready) {
-        return 0.0f;
+        return -999.0f;
     }
 
     float pressure = bme.readPressure() / 100.0f;  // Convert Pa to hPa
@@ -46,7 +48,7 @@ float readBME280_Pressure() {
         rttDebug.print("[BME280] Out-of-range pressure: ");
         rttDebug.print(pressure);
         rttDebug.println(" hPa");
-        return 0.0f;
+        return -999.0f;
     }
 
     return pressure;

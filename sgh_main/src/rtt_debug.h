@@ -4,31 +4,23 @@
 // ============================================================
 //  rtt_debug.h  —  SEGGER RTT wrapper  (STM32-A / sgh_main)
 //
+//  FW-3 FIX: Now extends Stream (not Print) to match STM32-B.
+//  Any library that calls Serial.available() / Serial.read()
+//  via the Stream interface will work correctly.
+//
 //  RULES — must not be violated:
-//
 //  1. DO NOT put  #define Serial rttDebug  here.
-//     It must only appear in main.cpp, after all #includes.
-//     Putting it here leaks the macro into every .cpp that
-//     includes this header (directly or via gadget.h), so
-//     sensor files whose Serial.print() calls resolve to
-//     the real uninitialized HardwareSerial get silently
-//     redirected — or worse, sensor files that DON'T include
-//     this header get the real Serial while gadget.cpp gets
-//     rttDebug, making debug output inconsistent.
-//
-//  2. available() and read() MUST call the real RTT functions.
-//     Hardcoding 0 / -1 makes Serial.available() always false,
-//     which permanently kills the RTT terminal command handler
-//     in main.cpp loop() (keys 1–6 never fire).
+//  2. available() and read() MUST call real RTT functions.
 // ============================================================
 
 #include "SEGGER_RTT.h"
 #include <Arduino.h>
 
-class RTTSerial : public Print {
+class RTTSerial : public Stream {
 public:
     void begin(unsigned long /*baud*/) { SEGGER_RTT_Init(); }
 
+    // ----- output (Print) -----
     size_t write(uint8_t c) override {
         SEGGER_RTT_Write(0, &c, 1);
         return 1;
@@ -38,23 +30,29 @@ public:
         return s;
     }
 
-    // A-BUG-2 FIX: was hardcoded `return 0`
-    // → Serial.available() in loop() was always 0, RTT keys dead.
-    int available() {
+    // Spin until RTT up-buffer drained (max 200ms).
+    void flush() override {
+        uint32_t t0 = millis();
+        while (SEGGER_RTT_HasDataUp(0)) {
+            if (millis() - t0 > 200) break;
+        }
+    }
+
+    // ----- input (Stream) — RTT channel 0 down-buffer -----
+    int available() override {
         return (int)SEGGER_RTT_HasData(0);
     }
 
-    // A-BUG-3 FIX: was hardcoded `return -1`
-    // → Serial.read() never returned actual input even if available() worked.
-    int read() {
+    int read() override {
         unsigned char c = 0;
         return (SEGGER_RTT_Read(0, &c, 1) == 1) ? (int)c : -1;
     }
+
+    int peek() override { return -1; }  // RTT has no peek
 };
 
 extern RTTSerial rttDebug;  // single definition in main.cpp
 
-// A-BUG-1 FIX: #define Serial rttDebug REMOVED from this header.
-// It belongs only in main.cpp, after all library #includes.
+// NOTE: #define Serial rttDebug belongs only in main.cpp.
 
 #endif // RTT_DEBUG_H

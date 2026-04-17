@@ -1,0 +1,109 @@
+# =============================================================
+#  .claudeignore — SGH firmware repo
+#
+#  Place this file at the repo root (next to sgh_main/ and sgh_sup/).
+#  Claude Code will not read any of these paths into context,
+#  cutting token usage by ~60-70% on this codebase.
+#
+#  Rule of thumb used here:
+#    IGNORE  → vendor code, build artifacts, binary assets,
+#              duplicate files, debug tooling, docs Claude
+#              already absorbed in the analysis session
+#    KEEP    → every .cpp/.h/.ini/.sh file Claude needs to
+#              read and edit per the fix prompt
+# =============================================================
+
+
+# -------------------------------------------------------
+# 1. PlatformIO build output  (largest token sink)
+#    .pio/ contains compiled objects, firmware ELF/BIN,
+#    dependency sources, and package caches. None of this
+#    is editable source — Claude must never read it.
+# -------------------------------------------------------
+.pio/
+**/.pio/
+
+
+# -------------------------------------------------------
+# 2. SEGGER RTT vendor library  (second-largest sink)
+#
+#    SEGGER_RTT.c and SEGGER_RTT.h are identical in both
+#    sgh_main/src/ and sgh_sup/src/ — 2 × ~1500 lines of
+#    vendor ring-buffer code. Claude must NOT modify these
+#    files (documented requirement), so there is zero
+#    benefit to loading them.
+#
+#    SEGGER_RTT_Conf.h IS kept — it contains tuneable
+#    #define values that may need adjustment.
+# -------------------------------------------------------
+sgh_main/src/SEGGER_RTT.c
+sgh_main/src/SEGGER_RTT.h
+sgh_sup/src/SEGGER_RTT.c
+sgh_sup/src/SEGGER_RTT.h
+
+
+# -------------------------------------------------------
+# 3. Markdown documentation files
+#
+#    Claude already read and synthesised these in the
+#    analysis session. They do not contain editable code
+#    and loading them again wastes tokens on every task.
+# -------------------------------------------------------
+sgh_main/I2C_SENSOR_FIXES.md
+sgh_main/SENSOR_FIXES.md
+sgh_sup/RTT_SETUP_GUIDE.md
+README.md
+**/README
+sgh_main/include/README
+sgh_main/lib/README
+sgh_main/test/README
+sgh_sup/include/README
+sgh_sup/lib/README
+sgh_sup/test/README
+
+
+# -------------------------------------------------------
+# 4. Test directory stubs (after Task 5 moves code to src/)
+#
+#    Once the fix prompt runs Task 5, test/ contains only
+#    the README stub. Including it before that point also
+#    wastes tokens because Claude is instructed to move
+#    the files, not read them repeatedly.
+#    Keep this rule — it is safe both before and after.
+# -------------------------------------------------------
+sgh_sup/test/
+
+
+# -------------------------------------------------------
+# 5. VS Code workspace files
+#
+#    Editor settings and extension recommendations have
+#    no bearing on firmware editing tasks.
+# -------------------------------------------------------
+**/.vscode/
+
+
+# -------------------------------------------------------
+# 6. PlatformIO boilerplate include/lib directories
+#
+#    Both projects have empty include/ and lib/ folders
+#    with only a README stub inside. No source lives here.
+# -------------------------------------------------------
+sgh_main/include/
+sgh_main/lib/
+sgh_sup/include/
+sgh_sup/lib/
+
+
+# -------------------------------------------------------
+# 7. Git internals
+# -------------------------------------------------------
+.git/
+
+
+# -------------------------------------------------------
+# 8. Secrets (should never be read into context)
+# -------------------------------------------------------
+**/config.h
+**/*.secret
+**/.env

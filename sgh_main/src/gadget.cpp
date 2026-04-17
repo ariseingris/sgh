@@ -37,6 +37,7 @@ void setup_Actuators() {
     pinMode(PISTON_IN2,       OUTPUT);
     pinMode(BUTTON_OPEN_PIN,  INPUT_PULLUP);
     pinMode(BUTTON_CLOSE_PIN, INPUT_PULLUP);
+    pinMode(BUTTON_TOGGLE_PIN, INPUT_PULLUP);
 
     digitalWrite(FAN_RELAY,  LOW);
     digitalWrite(PISTON_IN1, LOW);
@@ -124,28 +125,59 @@ void update_actuators() {
 //  only on the transition HIGH→LOW (button just pressed).
 //  The DEBOUNCE_MS guard still filters contact bounce.
 // ============================================================
+// Thêm biến đếm thời gian cho nút PB1 ở ngay trên hàm
+static unsigned long lastToggleMs = 0;
+
 void check_PhysicalButtons() {
     static bool prevOpen  = HIGH;
     static bool prevClose = HIGH;
+    static bool prevToggle = HIGH;
     unsigned long now = millis();
 
-    bool openNow  = digitalRead(BUTTON_OPEN_PIN);
-    bool closeNow = digitalRead(BUTTON_CLOSE_PIN);
+    bool openNow  = digitalRead(BUTTON_OPEN_PIN);    // PA7
+    bool closeNow = digitalRead(BUTTON_CLOSE_PIN);   // PB0
+    bool toggleNow = digitalRead(BUTTON_TOGGLE_PIN); // PB1
 
-    // Falling edge (HIGH → LOW) = fresh press
+    // 1. Nút PA7: Chỉ MỞ PISTON
     if (openNow == LOW && prevOpen == HIGH) {
         if (now - lastOpenBtnMs >= DEBOUNCE_MS) {
             lastOpenBtnMs = now;
-            deactivate_system();
+            extend_Piston();
         }
     }
     prevOpen = openNow;
 
+    // 2. Nút PB0: Chỉ ĐÓNG PISTON
     if (closeNow == LOW && prevClose == HIGH) {
         if (now - lastCloseBtnMs >= DEBOUNCE_MS) {
             lastCloseBtnMs = now;
-            activate_system();
+            retract_Piston();
         }
     }
     prevClose = closeNow;
+
+    // 3. Nút PB1: Bật/Tắt hệ thống (Toggle Sensor System)
+    if (toggleNow == LOW && prevToggle == HIGH) {
+        if (now - lastToggleMs >= DEBOUNCE_MS) {
+            lastToggleMs = now;
+            // BUG-3 FIX: route through activate/deactivate so fan+piston respond
+            if (systemActive) deactivate_system();
+            else              activate_system();
+        }
+    }
+    prevToggle = toggleNow;  // BUG-2 FIX: must update outside the if block
+}
+
+// ============================================================
+//  State getters — for DATA: telemetry payload
+// ============================================================
+bool getFanState() {
+    // FAN_RELAY HIGH = fan ON
+    return digitalRead(FAN_RELAY) == HIGH;
+}
+
+bool getPistonState() {
+    // PISTON_IN2 HIGH = retract_Piston() was last called (closed)
+    // PISTON_IN2 LOW  = extended (open) or stopped
+    return digitalRead(PISTON_IN2) == HIGH;
 }

@@ -46,6 +46,9 @@ $OPENOCD_BIN \
     -f interface/stlink.cfg \
     -f target/stm32f1x.cfg \
     -c "telnet_port 4444" \
+    -c "gdb_port disabled" \
+    -c "tcl_port disabled" \
+    -c "init" \
     > /tmp/openocd_rtt.log 2>&1 &
 OPENOCD_PID=$!
 sleep 3
@@ -69,23 +72,48 @@ fi
 echo "   ✓ OpenOCD running (PID: $OPENOCD_PID)"
 
 # 6. Configure RTT channels (with retries for reliability)
+# Each command is sent in a separate nc invocation so we wait for OpenOCD
+# to fully process one command before sending the next.
 echo "► Step 4: Configuring RTT..."
 RTT_SETUP_OK=false
 for attempt in 1 2 3; do
     echo "   Attempt $attempt/3..."
-    if (echo "rtt setup 0x20000000 0x5000 \"SEGGER RTT\""; sleep 0.3; \
-        echo "rtt start"; sleep 0.3; \
-        echo "rtt server start 19021 0"; sleep 1) | nc -w 3 localhost 4444 2>/dev/null > /tmp/rtt_setup.log; then
+
+    # Step A: tell OpenOCD where the RTT control block lives
+    echo "rtt setup 0x20000000 0x10000 \"SEGGER RTT\"" \
+        | nc -w 3 localhost 4444 > /tmp/rtt_setup.log 2>/dev/null
+
+    # Wait for OpenOCD to finish scanning RAM for the control block.
+    # 2 s is enough even on slow targets; 0.3 s was the root cause of the bug.
+    sleep 2
+
+    # Step B: start RTT (reads the control block found above)
+    echo "rtt start" \
+        | nc -w 3 localhost 4444 >> /tmp/rtt_setup.log 2>/dev/null
+    sleep 2
+
+    # Step C: expose channel 0 on a TCP port so we can nc into it
+    echo "rtt server start 19021 0" \
+        | nc -w 3 localhost 4444 >> /tmp/rtt_setup.log 2>/dev/null
+    sleep 3
+
+    # Confirm success by checking for "rtt: Searching" or port being open
+    if grep -qi "found" /tmp/rtt_setup.log || \
+       netstat -tuln 2>/dev/null | grep -q ":19021"; then
         RTT_SETUP_OK=true
         break
     fi
-    sleep 1
+
+    echo "   ↳ Not ready yet, retrying..."
+    sleep 2
 done
 
 if [ "$RTT_SETUP_OK" = true ]; then
     echo "   ✓ RTT configured successfully"
 else
     echo "   ⚠ RTT setup response unclear (continuing...)"
+    echo "   Setup log:"
+    cat /tmp/rtt_setup.log
 fi
 
 # 7. Verify RTT server is listening
@@ -105,10 +133,8 @@ echo "  Debug output appears below. Press Ctrl+C to exit."
 echo "═════════════════════════════════════════════════════════"
 echo ""
 
-# Connect via netcat (more reliable than telnet)
 if command -v nc &> /dev/null; then
-    # Simply connect to the port where OpenOCD RTT server is listening
-    nc localhost 19021 || true
+    while true; do nc localhost 19021 2>/dev/null || sleep 2; done
 else
     telnet localhost 19021 || true
 fi
