@@ -20,6 +20,7 @@
 
 #define TINY_GSM_MODEM_SIM7600    // A7680C is SIM7600-compatible
 #define TINY_GSM_RX_BUFFER 1024
+#define TINY_GSM_USE_SSL          // enable TinyGsmClientSecure for HiveMQ Cloud :8883
 
 #include <Arduino.h>
 #include <TinyGsmClient.h>

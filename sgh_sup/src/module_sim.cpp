@@ -29,6 +29,9 @@ HardwareSerial        SerialA  (STM32A_RX_PIN, STM32A_TX_PIN); // USART1: PA10 R
 TinyGsm        modem(SerialSIM);
 TinyGsmClient  gsmClientMQTT(modem, 0);  // channel 0 — for MQTT
 TinyGsmClient  gsmClientHTTP(modem, 1);  // channel 1 — for HTTP alerts
+// NOTE: T3 (TLS via TinyGsmClientSecure) NOT applied — TinyGSM 0.11.7's
+// SIM7600 secure client is commented out (TODO). Needs library upgrade or
+// native SIMCOM AT-level MQTT (AT+CMQTTSSLCFG). See chat for options.
 PubSubClient   mqttClient(gsmClientMQTT);
 
 // -------------------------------------------------------

@@ -10,10 +10,17 @@ deactivate_System();    // Immediately deactivate
 ```
 This caused continuous toggling of relays and actuators every loop cycle.
 
-**Solution:** Implemented a state machine that only activates/deactivates based on sensor conditions:
-- System activates when CO2 data is ready (`g_dataReady == true`)
-- System deactivates when CO2 data becomes unavailable
-- Guard conditions prevent repeated calls (check `if (systemActive)` before activating)
+**Solution (current — state machine):** Replaced `systemActive` boolean and `activate/deactivate_system()` with a three-state machine in `gadget.cpp`:
+
+```
+STATE_IDLE  ──enterMeasuring()──▶  STATE_MOVING  ──piston stops, fan ON──▶  STATE_MEASURING
+STATE_MEASURING  ──enterIdle()──▶  STATE_MOVING  ──piston stops, fan OFF──▶  STATE_IDLE
+```
+
+- `enterMeasuring()` / `enterIdle()` — called by UART commands (`SYSTEM_ON`/`SYSTEM_OFF`), RTT keys `1`/`2`, and the PB12 toggle button.
+- `update_actuators()` (called every `loop()`) stops the piston after `PISTON_RUN_MS` (8 s) and drives the `MOVING → MEASURING/IDLE` transition based on fan state.
+- `isMeasuring()` — returns true only in `STATE_MEASURING`; gates `sendDataToB()` and alert sending.
+- The old `g_dataReady` gating described below is **historical** — it no longer drives system state.
 
 ---
 
@@ -80,25 +87,32 @@ bool g_dataReady = false;            // CO2 sensor ready
 
 ---
 
-## Main Loop Flow
+## Main Loop Flow (current)
 
 ```
 Loop Start
     ↓
-Read All Sensors (interval-based)
+Pet watchdog (IWatchdog.reload())
     ↓
-Check: CO2 Ready & System Inactive?
-    → YES: Activate System (piston, fan)
+Read All Sensors (every 5 s)
     ↓
-Check: System Active & CO2 Not Ready?
-    → YES: Deactivate System
+Receive commands from STM32-B (non-blocking UART)
+    → SYSTEM_ON  → enterMeasuring() → STATE_MOVING → (piston retracts, fan ON)
+    → SYSTEM_OFF → enterIdle()      → STATE_MOVING → (piston extends, fan OFF)
+    → FAN_ON/OFF, PISTON_OPEN/CLOSE — direct actuator calls
     ↓
-Check: Send SMS? (hourly if system active)
-    → YES: Send sensor data
+Send DATA: to STM32-B (every 10 s, only while STATE_MEASURING)
     ↓
-Update SIM Connection
+update_actuators() — auto-stop piston after 8 s; transitions MOVING → MEASURING/IDLE
     ↓
-Small Delay (100ms)
+check_PhysicalButtons() — edge-triggered debounce
+    → PA7 → extend_Piston()
+    → PB0 → retract_Piston()
+    → PB12 → enterMeasuring() / enterIdle() toggle
+    ↓
+Periodic RTT sensor dump (every 10 s)
+    ↓
+Periodic alert via STM32-B (every 1 h, only while STATE_MEASURING + CO2 ready)
     ↓
 Loop
 ```
@@ -138,3 +152,44 @@ Loop
 3. Verify each sensor initializes successfully
 4. Test system activation/deactivation logic
 5. Verify SMS alerts are sent periodically
+6. Monitor I2C communication (no bus conflicts)
+
+---
+
+**Review (concise)**
+
+- **System overview:** STM32-A (sensor/actuator node) sends JSON over UART to STM32-B (gateway). STM32-B publishes sensor JSON to an MQTT broker and posts alerts to ntfy.sh. The gateway subscribes to a control topic and forwards commands to STM32-A via UART.
+
+**Visual Workflow**
+
+STM32-A (sgh_main/src/main.cpp)
+    - Read sensors → Build JSON → Send `DATA:{...}` over UART
+    - Send `ALERT:<msg>` over UART when alert condition
+    - Receive commands via UART (e.g., `SYSTEM_ON`, `FAN_ON`) and ACK
+                |
+                v
+STM32-B Gateway (sgh_sup)
+    - Non-blocking UART reader parses `DATA:`, `ALERT:`, `ACK:` lines
+    - `DATA:` → published to MQTT topic for device
+    - `ALERT:` → posted to ntfy.sh (alerting path)
+    - MQTT callback → valid commands forwarded to STM32-A via UART
+                |
+                v
+MQTT Broker (HiveMQ Cloud)
+    - Receives sensor publishes (for dashboard/clients)
+    - Sends control messages to gateway (subscribed topic)
+
+**Critical Issues (high priority)**
+
+- **Secrets in repo:** `sgh_sup/src/config.h` may contain broker credentials and phone numbers in cleartext — critical exposure risk.
+- **TLS/port mismatch risk:** `MQTT_PORT` may be set to 8883 while TLS support in the modem/client is not guaranteed — this causes silent connection failures.
+- **Blocking alert path risk:** If HTTP alerting is performed synchronously inside UART handling, long POSTs can corrupt UART parsing or delay keepalive; alerts should be offloaded from the UART path.
+- **MQTT QoS assumptions:** Code uses QoS 1 in some places (subscribe/LWT) but mobile/GPRS + PubSubClient behavior may not guarantee QoS1 delivery semantics — verify requirements.
+- **Buffer overflow / data loss:** Fixed-size ring buffers for sensor payloads and ACKs overwrite or drop entries when full; prolonged broker outage can cause silent loss.
+- **Hard-coded routing assumptions:** Phone numbers and ntfy topics are stored in gateway-side config; mismatch between devices or accidental commits can break alerts.
+- **Macro fragility:** `#define Serial rttDebug` must remain after all library includes; moving or refactoring may break TinyGSM or other libraries.
+- **Lack of telemetry:** No dedicated diagnostic/troubleshooting MQTT topic for queue sizes, modem status, or failure reasons — remote debugging is harder.
+
+---
+
+If you'd like, I can (A) add this content to a standalone `REVIEW.md`, or (B) open a non-invasive PR that only documents these issues without changing code. Which do you prefer?

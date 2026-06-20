@@ -66,6 +66,9 @@ static void parseLineFromA(const String& line) {
         snprintf(buf, sizeof(buf), "{\"ack\":\"%s\"}", line.c_str());
         queueAckPublish(buf);
 
+    } else if (line.startsWith("INFO:")) {
+        // Status breadcrumb from STM32-A (e.g. INFO:BOOT) — already printed above
+
     } else {
         Serial.println("[RX←A] Unrecognised line.");
     }

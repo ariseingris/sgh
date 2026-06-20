@@ -22,6 +22,13 @@
 
 static SensirionI2CScd4x scd4x;
 static bool scd40Ready = false;
+static int scd40FailCount = 0;
+
+// config
+uint16_t readSCD40_CO2();
+void setupSCD40_Sensor();
+bool isSCD40_DataReady();
+
 
 void setupSCD40_Sensor() {
     scd4x.begin(Wire);
@@ -72,6 +79,18 @@ bool isSCD40_DataReady() {
     if (!scd40Ready) return false;
 
     bool dataReady = false;
+    unit_16_t err = scd4x.getDataReadyFlag(dataReady);
+    if(err){
+        scd40FailCount++;
+        rttDebug.print("[SCD40] getDataReadyFlag error: ");
+        rttDebug.println(err);
+        if (scd40FailCount >= 5) {
+            rttDebug.println("[SCD40] - re-init cause errors");
+            scd40FailCount = 0;
+            setupSCD40_Sensor();
+        }
+        return false;
+    }
     // FIX: getDataReadyFlag() returns a non-zero error code on I2C failure.
     // Previously the return value was discarded, so a bus error left
     // dataReady=false (initialised) — which looks correct but hides the error.

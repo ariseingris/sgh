@@ -48,18 +48,13 @@ unsigned long       lastAlertMs    = 0;
 // -------------------------------------------------------
 //  Intervals
 // -------------------------------------------------------
-const unsigned long SENSOR_INTERVAL = 5000UL;
+const unsigned long SENSOR_INTERVAL = 6000UL;
 const unsigned long DATA_INTERVAL   = 10000UL;
 const unsigned long PRINT_INTERVAL  = 10000UL;
 
 unsigned long prevSensor = 0;
 unsigned long prevData   = 0;
 unsigned long prevPrint  = 0;
-
-// -------------------------------------------------------
-//  System state
-// -------------------------------------------------------
-bool systemActive = false;
 
 // -------------------------------------------------------
 //  Global sensor values
@@ -160,7 +155,8 @@ void sendDataToB() {
         "DATA:{\"ts\":%lu,\"temp\":%s,\"hum\":%s,\"co2\":%u,"
         "\"lux\":%s,\"pressure\":%s,\"gas\":%d,\"soil\":%d,"
         "\"fan\":%d,\"piston\":%d}",
-        ts, sTemp, sHum, (unsigned int)g_co2,
+        ts, sTemp, sHum, g_co2Ready ? itoa(g_co2, tmpBuf, 10): "null",
+        //avoid send old data of CO2 when not ready, send 0 instead. STM32-B will ignore CO2=0 if not ready.
         sLux, sPress, g_gasValue, g_soilMoist,
         (int)getFanState(), (int)getPistonState());
     SerialB.println(buf);
@@ -175,7 +171,8 @@ void sendDataToB() {
 void sendFakeDataToB() {
     const char* fakePayload =
         "DATA:{\"ts\":0,\"temp\":26.5,\"hum\":75.2,\"co2\":450,"
-        "\"lux\":1500.0,\"pressure\":1012.5,\"gas\":280,\"soil\":60}";
+        "\"lux\":1500.0,\"pressure\":1012.5,\"gas\":280,\"soil\":60,"
+        "\"fan\":1,\"piston\":1}";
     SerialB.println(fakePayload);
     Serial.print("[TX→B] FAKE: ");
     Serial.println(fakePayload);
@@ -219,11 +216,11 @@ void parseBCommand(const char* line) {
     Serial.println(line);
 
     if (strcmp(line, "SYSTEM_ON") == 0) {
-        activate_system();
+        enterMeasuring();
         SerialB.println("ACK:SYSTEM_ON");
 
     } else if (strcmp(line, "SYSTEM_OFF") == 0) {
-        deactivate_system();
+        enterIdle();
         SerialB.println("ACK:SYSTEM_OFF");
 
     } else if (strcmp(line, "FAN_ON") == 0) {
@@ -268,7 +265,8 @@ void printdata() {
     } else {
         Serial.println("CO2   (SCD40):    Not ready");
     }
-    Serial.print("System active:    "); Serial.println(systemActive ? "YES" : "NO");
+    const char* stateNames[] = { "IDLE", "MOVING", "MEASURING" };
+    Serial.print("State:            "); Serial.println(stateNames[getCurrentState()]);
     Serial.println("=======================");
 }
 
@@ -280,7 +278,7 @@ void setup() {
     delay(2000);
 
     Wire.begin();
-    Wire.setClock(400000); // 400 kHz fast mode — required for reliable multi-sensor I2C
+    Wire.setClock(100000); // 400 kHz fast mode — required for reliable multi-sensor I2C
     Serial.println("====== STM32-A NODE INIT ======");
 
     // -------------------------------------------------------
@@ -318,17 +316,18 @@ void setup() {
     SerialB.begin(BAUD_B);
     delay(500);
     Serial.println("[MAIN] UART to STM32-B ready (PA9 TX / PA10 RX @ 115200)");
+    SerialB.println("INFO:BOOT");   // lets STM32-B detect mid-session resets
 
     stop_Piston();
 
     rttDebug.println("====== READY ======");
     rttDebug.println("Commands:");
-    rttDebug.println("  1 = Activate system");
-    rttDebug.println("  2 = Deactivate system");
+    rttDebug.println("  1 = Force MEASURING state");
+    rttDebug.println("  2 = Force IDLE state");
     rttDebug.println("  3 = Print sensor data");
     rttDebug.println("  4 = Send alert via B");
     rttDebug.println("  5 = Send real sensor DATA: to B now");
-    rttDebug.println("  6 = Send FAKE DATA: to B now");  // <-- new
+    rttDebug.println("  6 = Send FAKE DATA: to B now");
 
     // Watchdog: 4-second timeout. Must call IWatchdog.reload() in loop().
     IWatchdog.begin(4000000); // 4 seconds in microseconds
@@ -386,10 +385,10 @@ void loop() {
         }
     }
 
-    // 3. Send real sensor data to B every DATA_INTERVAL
+    // 3. Send real sensor data to B every DATA_INTERVAL (only while MEASURING)
     if (now - prevData >= DATA_INTERVAL) {
         prevData = now;
-        sendDataToB();
+        if (isMeasuring()) sendDataToB();
     }
  
     // 4. Serial (→ rttDebug via macro) debug commands — RTT terminal input.
@@ -397,8 +396,8 @@ void loop() {
         char c = Serial.read();
         while (Serial.available()) Serial.read();   // flush rest
         switch (c) {
-            case '1': activate_system();   Serial.println("[CMD] SYSTEM ON");       break;
-            case '2': deactivate_system(); Serial.println("[CMD] SYSTEM OFF");      break;
+            case '1': enterMeasuring(); Serial.println("[CMD] Force MEASURING"); break;
+            case '2': enterIdle();      Serial.println("[CMD] Force IDLE");      break;
             case '3': printdata();                                                                          break;
             case '4': requestAlertFromB();                                                                  break;
             case '5': sendDataToB();        Serial.println("[CMD] Real DATA sent.");                        break;
@@ -407,18 +406,20 @@ void loop() {
         }
     }
 
-    // 5. Piston auto-stop
+    // 5. Piston auto-stop + state-machine transitions (CLAUDE.md rule 5)
     update_actuators();
+
+    // 6. Button polling (PA7 open / PB0 close / PB12 toggle)
     check_PhysicalButtons();
 
-    // 6. Periodic USB printout
+    // 7. Periodic USB printout
     if (now - prevPrint >= PRINT_INTERVAL) {
         prevPrint = now;
         printdata();
     }
 
-    // 7. Periodic alert via B (only when system active and CO2 ready)
-    if (systemActive && g_co2Ready) {
+    // 8. Periodic alert via B (only while MEASURING and CO2 ready)
+    if (isMeasuring() && g_co2Ready) {
         if (now - lastAlertMs >= ALERT_INTERVAL) {
             lastAlertMs = now;
             requestAlertFromB();
