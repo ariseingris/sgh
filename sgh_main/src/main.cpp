@@ -150,15 +150,25 @@ void sendDataToB() {
     dtostrf(g_lux,         1, 1, sLux);
     dtostrf(g_pressure,    1, 1, sPress);
 
+    // CO2 FIX: build co2 field separately as a string so we can send
+    // "null" when not ready, instead of transmitting a stale/old value.
+    // STM32-B / mqttBridge.js already treat co2:null as "no reading".
+    char sCo2[8];
+    if (g_co2Ready) {
+        snprintf(sCo2, sizeof(sCo2), "%u", g_co2);
+    } else {
+        strcpy(sCo2, "null");
+    }
+
     char buf[280];
     snprintf(buf, sizeof(buf),
-        "DATA:{\"ts\":%lu,\"temp\":%s,\"hum\":%s,\"co2\":%u,"
+        "DATA:{\"ts\":%lu,\"temp\":%s,\"hum\":%s,\"co2\":%s,"
         "\"lux\":%s,\"pressure\":%s,\"gas\":%d,\"soil\":%d,"
         "\"fan\":%d,\"piston\":%d}",
-        ts, sTemp, sHum, g_co2Ready ? itoa(g_co2, tmpBuf, 10): "null",
-        //avoid send old data of CO2 when not ready, send 0 instead. STM32-B will ignore CO2=0 if not ready.
+        ts, sTemp, sHum, sCo2,
         sLux, sPress, g_gasValue, g_soilMoist,
         (int)getFanState(), (int)getPistonState());
+
     SerialB.println(buf);
     Serial.print("[TX→B] ");
     Serial.println(buf);

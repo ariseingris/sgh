@@ -19,6 +19,8 @@ extern RTTSerial rttDebug;  // defined in main.cpp
 static SystemState    currentState    = STATE_IDLE;
 static PistonDir      pistonDir       = PISTON_STOPPED;
 static unsigned long  stateEnteredMs  = 0;
+static bool pistonClosed = false; // giữ nguyên sau khi dừng
+
 
 // -------------------------------------------------------
 //  Piston auto-stop timer
@@ -80,13 +82,16 @@ void retract_Piston() {
     rttDebug.println(">>> PISTON: RETRACT");
 }
 
+
 void stop_Piston() {
+    if (pistonDir == PISTON_RETRACTING) pistonClosed = true;
+    else if (pistonDir == PISTON_EXTENDING) pistonClosed = false;
     digitalWrite(PISTON_IN1, LOW);
     digitalWrite(PISTON_IN2, LOW);
     pistonRunning = false;
-    pistonDir     = PISTON_STOPPED;
-    rttDebug.println(">>> PISTON: STOP");
+    pistonDir = PISTON_STOPPED;
 }
+bool getPistonState() { return pistonClosed; }
 
 // ============================================================
 //  Fan

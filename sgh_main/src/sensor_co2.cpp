@@ -75,12 +75,12 @@ uint16_t readSCD40_CO2() {
     return co2;
 }
 
+
 bool isSCD40_DataReady() {
     if (!scd40Ready) return false;
-
     bool dataReady = false;
-    unit_16_t err = scd4x.getDataReadyFlag(dataReady);
-    if(err){
+    uint16_t err = scd4x.getDataReadyFlag(dataReady);
+    if (err) {
         scd40FailCount++;
         rttDebug.print("[SCD40] getDataReadyFlag error: ");
         rttDebug.println(err);
@@ -95,11 +95,6 @@ bool isSCD40_DataReady() {
     // Previously the return value was discarded, so a bus error left
     // dataReady=false (initialised) — which looks correct but hides the error.
     // Now we check it: on error return false and log so the watchdog can act.
-    uint16_t err = scd4x.getDataReadyFlag(dataReady);
-    if (err) {
-        rttDebug.print("[SCD40] getDataReadyFlag error: ");
-        rttDebug.println(err);
-        return false;
-    }
+    scd40FailCount = 0;
     return dataReady;
 }
