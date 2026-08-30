@@ -1,0 +1,19 @@
+#ifndef CONFIG_H
+#define CONFIG_H
+
+#define SIM_APN_NAME    "your-apn"
+#define SIM_APN_USER    ""
+#define SIM_APN_PASS    ""
+
+#define MQTT_BROKER     "your-broker-hostname"
+#define MQTT_PORT       1883
+#define MQTT_USER       "your-mqtt-username"
+#define MQTT_PASS       "your-mqtt-password"
+
+#define NTFY_TOPIC      "your-ntfy-topic"
+
+// Alert phone number (E.164 format) — used by onAlertFromA()
+#define ALERT_PHONE_NUMBER  "+84xxxxxxxxx"
+
+#endif // CONFIG_H
+
